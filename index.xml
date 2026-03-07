@@ -2,12 +2,12 @@
 <index version="1.0" name="Studio Kozak">
 
   <category name="MIDI">
-    <reapack name="SK Drums Generator" type="script" desc="SK Drums Generator : 16-step drum sequencer with velocity layers, presets and MIDI export">
+    <reapack name="SK Drums Generator.lua" type="script" desc="SK Drums Generator : 16-step drum sequencer with velocity layers, presets and MIDI export">
       <version name="1.0.1" author="Studio Kozak" time="2026-03-07">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Drums%20Generator.lua</source>
       </version>
     </reapack>
-    <reapack name="SK Harmonic Compass" type="script" desc="SK Harmonic Compass : Circle of fifths chord inserter with voicing, modes and patterns">
+    <reapack name="SK Harmonic Compass.lua" type="script" desc="SK Harmonic Compass : Circle of fifths chord inserter with voicing, modes and patterns">
       <version name="1.0" author="Studio Kozak" time="2026-03-07">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Harmonic%20Compass.lua</source>
       </version>
@@ -15,7 +15,7 @@
   </category>
 
   <category name="LoFi">
-    <reapack name="SK Analog Drift Engine" type="effect" desc="SK Analog Drift Engine : Analog tape and cassette drift simulator with wow, flutter and saturation">
+    <reapack name="SK Analog Drift Engine.jsfx" type="effect" desc="SK Analog Drift Engine : Analog tape and cassette drift simulator with wow, flutter and saturation">
       <version name="1.0" author="Studio Kozak" time="2026-03-07">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Effects/SK%20Analog%20Drift%20Engine.jsfx</source>
       </version>
