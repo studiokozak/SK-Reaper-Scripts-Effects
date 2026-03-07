@@ -1,0 +1,482 @@
+// =============================================================================
+//  SK ANALOG DRIFT ENGINE
+//  Version 1.0
+//
+//  A JSFX plugin for REAPER that breathes life into digital recordings by
+//  simulating the organic imperfections of aging analog hardware — tape
+//  machines, cassette decks, and worn turntables.
+//
+//  From a barely perceptible organic warmth to the unstable character of
+//  a degraded tape, every setting between those extremes is musically useful.
+//
+// -----------------------------------------------------------------------------
+//  PARAMETERS
+// -----------------------------------------------------------------------------
+//
+//  Character (0–100)
+//    Master depth of all pitch and time modulation. At low values the effect
+//    is subliminal; at high values wow and flutter become clearly audible.
+//
+//  Age (0–100)
+//    Simulates hardware wear. Increases amplitude instability, dropout
+//    frequency, and progressively darkens the high-frequency response.
+//
+//  Motion (0–100)
+//    Controls the speed of all modulators. Low values produce a slow,
+//    dreamy drift; high values introduce faster, more erratic movement.
+//
+//  Width (0–100)
+//    Stereo independence of the drift. At 0 both channels modulate in
+//    perfect unison. At 100 each channel drifts independently, widening
+//    the perceived stereo field organically.
+//
+//  Dirt (0–100)
+//    Adds analog grain: gentle soft-clipping saturation with a faint noise
+//    floor that appears above 40%.
+//
+//  Tone (0–100)
+//    Tonal color. Below 50: progressive low-pass darkening (vintage tape).
+//    At 50: signal passes flat. Above 50: subtle high-frequency lift.
+//
+//  Mix (0–100)
+//    Dry/wet balance. At 0 the input signal passes unaffected.
+//
+//  Output (-24 to +6 dB)
+//    Output gain in decibels. Use to compensate for any perceived level
+//    change introduced by the effect.
+//
+// -----------------------------------------------------------------------------
+//  SIGNAL CHAIN
+// -----------------------------------------------------------------------------
+//
+//  Input
+//    │
+//    ├── [dry path] ──────────────────────────────────────────────┐
+//    │                                                            │
+//    └── [wet path]                                               │
+//          │                                                      │
+//          ├── Circular buffer write                              │
+//          ├── Modulated read (random walk + wow LFO + flutter)   │
+//          ├── Amplitude drift (slow random walk)                 │
+//          ├── Dropout gate (Age-dependent)                       │
+//          ├── Tone shaping (dark LP / bright HF shelf)           │
+//          ├── Age darkening (progressive LP)                     │
+//          └── Dirt (soft clip + noise floor)                     │
+//                │                                                │
+//                └──────────── Dry/Wet mix ──────────────────────┘
+//                                    │
+//                              Output gain
+//                                    │
+//                                  Out
+//
+// -----------------------------------------------------------------------------
+//  MEMORY MAP
+// -----------------------------------------------------------------------------
+//
+//  buf_l = address 0     → mem[0    .. 8191 ]  left channel  circular buffer
+//  buf_r = address 8192  → mem[8192 .. 16383]  right channel circular buffer
+//
+//  Buffer size : 8192 samples (~186 ms @ 44100 Hz)
+//  Max modulation depth : ±48 samples around a 200-sample base delay
+//
+// -----------------------------------------------------------------------------
+//  PRESETS
+// -----------------------------------------------------------------------------
+//
+//  Name               Char  Age  Motion  Width  Dirt  Tone  Mix  Output
+//  ─────────────────────────────────────────────────────────────────────
+//  Subtle Analog        12    5      25     15     8    52   80       0
+//  Warm Tape            30   20      30     25    25    40   90       0
+//  Worn Cassette        55   55      50     35    50    35  100       0
+//  Broken Deck          80   80      70     50    70    25  100      -2
+//  Wide Ghost Texture   40   30      20     85    20    48   75       0
+//
+// -----------------------------------------------------------------------------
+//  MUSICAL USAGE
+// -----------------------------------------------------------------------------
+//
+//  Vocals      : Character 10–20, Age 5–15, Motion 20–30
+//                → Subtle breath and natural pitch micro-variation
+//
+//  Synth pads  : Character 30–50, Width 40–70, Tone 30–45
+//                → Wide, ghost-like stereo texture
+//
+//  Mix bus     : Character 5–10, Dirt 10–20, Tone 45–55
+//                → Analog glue, gentle saturation, cohesion
+//
+//  Lo-fi / tape: Character 60–80, Age 50–70, Dirt 50–70
+//                → Degraded cassette, unstable pitch, worn character
+//
+// =============================================================================
+
+desc: SK Analog Drift Engine
+tags: analog tape wow flutter drift saturation lo-fi
+
+slider1:12<0,100,0.1>Character
+slider2:20<0,100,0.1>Age
+slider3:30<0,100,0.1>Motion
+slider4:25<0,100,0.1>Width
+slider5:20<0,100,0.1>Dirt
+slider6:50<0,100,0.1>Tone
+slider7:100<0,100,0.1>Mix
+slider8:0<-24,6,0.1>Output (dB)
+
+// =============================================================================
+//  @init
+//  Runs once on load, and on samplerate changes.
+//  ext_noinit = 1 prevents re-initialization on transport start/stop.
+// =============================================================================
+@init
+
+ext_noinit = 1;
+
+// --- Circular buffer base addresses (EEL2 syntax: base[index]) ---
+buf_l = 0;       // left  channel : mem[0    .. 8191 ]
+buf_r = 8192;    // right channel : mem[8192 .. 16383]
+
+// --- Write-head positions ---
+wp_l = 0;
+wp_r = 0;
+
+// --- Pitch modulators ---
+// Random walk: integrated noise source for ultra-slow drift
+rw_l = 0;   rw_vl = 0;   // left  : position, velocity
+rw_r = 0;   rw_vr = 0;   // right : position, velocity
+
+// Wow LFO: slow sinusoidal pitch variation (~0.1–0.6 Hz)
+wow_pl = 0;               // left  phase (0–1)
+wow_pr = 0.314;           // right phase — offset to avoid perfect correlation
+
+// Flutter LFO: faster pitch ripple (~4–12 Hz)
+flt_pl = 0;               // left  phase
+flt_pr = 0;               // right phase
+
+// --- Amplitude modulators ---
+// Slow random-walk level variation (±10% maximum)
+am_l = 1;   am_vl = 0;   // left  : gain, velocity
+am_r = 1;   am_vr = 0;   // right : gain, velocity
+
+// --- Dropout state ---
+// dg : dropout gain (1.0 = full, 0.0 = silent)
+// dt : dropout timer (samples remaining in current dropout event)
+dg_l = 1;   dt_l = 0;
+dg_r = 1;   dt_r = 0;
+
+// --- Tone filter states (1-pole) ---
+tlp_l = 0;  tlp_r = 0;   // dark LP  (Tone < 50)
+hlp_l = 0;  hlp_r = 0;   // HF extraction LP (Tone > 50)
+alp_l = 0;  alp_r = 0;   // Age darkening LP
+
+// =============================================================================
+//  @sample
+//  Audio processing — executed once per sample for every channel pair.
+// =============================================================================
+@sample
+
+// -----------------------------------------------------------------------------
+//  1. PARAMETER READ
+//  sliderX variables are updated directly by REAPER before each @sample call.
+//  Normalise to 0..1 range for all percentage-based controls.
+// -----------------------------------------------------------------------------
+cn  = slider1 * 0.01;              // Character  : modulation depth
+an  = slider2 * 0.01;              // Age        : wear intensity
+mn  = slider3 * 0.01;              // Motion     : modulator speed
+wn  = slider4 * 0.01;              // Width      : stereo independence
+dn  = slider5 * 0.01;              // Dirt       : saturation amount
+tn  = slider6 * 0.01;              // Tone       : tonal color (0.5 = flat)
+xn  = slider7 * 0.01;              // Mix        : dry/wet ratio
+og  = exp(slider8 * 0.11512925);   // Output gain: dB to linear (ln10/20)
+
+// Per-sample inverse sample rate — ensures correct filter coefficients
+// at any project sample rate (44100, 48000, 96000 Hz, etc.)
+isr = 1.0 / srate;
+
+// -----------------------------------------------------------------------------
+//  2. RANDOM VALUES
+//  EEL2's rand(x) returns a float in [0, x).
+//  rand(2) - 1 yields a bipolar value in [-1, 1).
+//  WARNING: do not use a custom LCG here. EEL2 variables are 64-bit doubles
+//  with no integer overflow — a LCG will diverge to infinity in milliseconds.
+// -----------------------------------------------------------------------------
+r1 = rand(2) - 1;   // used for: random walk L, dropout trigger L
+r2 = rand(2) - 1;   // used for: random walk R (Width blending)
+r3 = rand(2) - 1;   // used for: amplitude drift L
+r4 = rand(2) - 1;   // used for: amplitude drift R (Width blending)
+
+// -----------------------------------------------------------------------------
+//  3. PITCH MODULATORS
+//
+//  Three modulation sources are combined to produce the read-head offset:
+//
+//    · Random walk  — Brownian motion with friction, very slow drift
+//                     Depth : ±30 samples at Character = 100
+//
+//    · Wow LFO      — Sinusoidal, 0.10 Hz (Motion=0) to 0.60 Hz (Motion=100)
+//                     Depth : ±15 samples at Character = 100
+//
+//    · Flutter LFO  — Sinusoidal, 4 Hz (Motion=0) to 12 Hz (Motion=100)
+//                     Depth : ±3 samples at Character = 100
+//
+//  The right channel modulators are slightly detuned from the left according
+//  to the Width parameter, avoiding artificial ping-pong while preserving
+//  a natural stereo drift character.
+// -----------------------------------------------------------------------------
+
+// Phase increments (cycles per sample)
+wi = (0.10 + mn * 0.50) * isr;   // wow   increment
+fi = (4.0  + mn * 8.0)  * isr;   // flutter increment
+
+// Random walk — left channel
+// Integrated noise with friction: velocity is smoothed, then clamped
+rw_vl = rw_vl * 0.9998 + r1 * 0.000005 * (1.0 + mn * 4.0);
+rw_vl >  0.0008 ? rw_vl =  0.0008;
+rw_vl < -0.0008 ? rw_vl = -0.0008;
+rw_l = rw_l + rw_vl;
+rw_l >  1.0 ? rw_l =  1.0;
+rw_l < -1.0 ? rw_l = -1.0;
+
+// Random walk — right channel
+// Noise is a blend of L and independent R, weighted by Width
+rw_vr = rw_vr * 0.9998 + (r1*(1.0-wn) + r2*wn) * 0.000005 * (1.0 + mn * 4.0);
+rw_vr >  0.0008 ? rw_vr =  0.0008;
+rw_vr < -0.0008 ? rw_vr = -0.0008;
+rw_r = rw_r + rw_vr;
+rw_r >  1.0 ? rw_r =  1.0;
+rw_r < -1.0 ? rw_r = -1.0;
+
+// Wow LFO
+wow_pl = wow_pl + wi;
+wow_pl >= 1.0 ? wow_pl = wow_pl - 1.0;
+wow_pr = wow_pr + wi * (1.0 + wn * 0.06);   // right runs slightly faster at high Width
+wow_pr >= 1.0 ? wow_pr = wow_pr - 1.0;
+wl = sin(wow_pl * 6.28318);
+wr = sin(wow_pr * 6.28318);
+
+// Flutter LFO
+flt_pl = flt_pl + fi;
+flt_pl >= 1.0 ? flt_pl = flt_pl - 1.0;
+flt_pr = flt_pr + fi * (1.0 + wn * 0.09);
+flt_pr >= 1.0 ? flt_pr = flt_pr - 1.0;
+fl = sin(flt_pl * 6.28318);
+fr = sin(flt_pr * 6.28318);
+
+// Read-head offset (in samples)
+// Base offset of 200 samples provides headroom for full modulation range
+ro_l = 200.0 + cn * (rw_l * 30.0 + wl * 15.0 + fl * 3.0);
+ro_r = 200.0 + cn * (rw_r * 30.0 + wr * 15.0 + fr * 3.0);
+ro_l > 500.0 ? ro_l = 500.0;
+ro_l <   2.0 ? ro_l =   2.0;
+ro_r > 500.0 ? ro_r = 500.0;
+ro_r <   2.0 ? ro_r =   2.0;
+
+// -----------------------------------------------------------------------------
+//  4. AMPLITUDE DRIFT
+//  Slow Brownian motion applied to gain, clamped to ±5% (0.95 – 1.05).
+//  Velocity friction (0.99995) and noise injection (0.0000012) are kept
+//  deliberately small so that level changes occur over several seconds,
+//  staying subliminal even on loud transient-heavy material.
+//  At Age = 100 the range opens to ±5% maximum — never enough to cause
+//  audible pumping on peaks.
+//  Right channel is blended between correlated (Width=0) and independent
+//  (Width=100) to match the stereo behavior of the pitch modulators.
+// -----------------------------------------------------------------------------
+am_vl = am_vl * 0.99995 + r3 * 0.0000012 * (1.0 + an * 2.0);
+am_vl >  0.0002 ? am_vl =  0.0002;
+am_vl < -0.0002 ? am_vl = -0.0002;
+am_l = am_l + am_vl;
+am_l > 1.05 ? am_l = 1.05;
+am_l < 0.95 ? am_l = 0.95;
+
+am_vr = am_vr * 0.99995 + (r3*(1.0-wn*0.5) + r4*(wn*0.5)) * 0.0000012 * (1.0 + an * 2.0);
+am_vr >  0.0002 ? am_vr =  0.0002;
+am_vr < -0.0002 ? am_vr = -0.0002;
+am_r = am_r + am_vr;
+am_r > 1.05 ? am_r = 1.05;
+am_r < 0.95 ? am_r = 0.95;
+
+// -----------------------------------------------------------------------------
+//  5. DROPOUTS
+//  Short gain interruptions triggered stochastically, with probability
+//  proportional to Age^2 (virtually silent at Age=0, audible at Age > 60).
+//
+//  Onset  : exponential decay (factor 0.995/sample) — no click on entry
+//  Release: linear ramp (+0.004/sample) — smooth recovery
+//
+//  Stereo behavior: at low Width, R follows L (correlated dropout).
+//                   at high Width, each channel triggers independently.
+// -----------------------------------------------------------------------------
+dp = an * an * 0.0003;   // dropout probability per sample
+
+// Left channel
+dt_l > 0.0 ? (
+  dt_l = dt_l - 1.0;
+  dg_l = dg_l * 0.995;
+  dg_l < 0.0 ? dg_l = 0.0;
+) : (
+  dg_l < 1.0 ? (
+    dg_l = dg_l + 0.004;
+    dg_l > 1.0 ? dg_l = 1.0;
+  ) : (
+    rand(1) < dp ? (
+      dt_l = 80.0 + an * 500.0 * rand(1);   // duration: 80–580 samples
+    );
+  );
+);
+
+// Right channel
+dt_r > 0.0 ? (
+  dt_r = dt_r - 1.0;
+  dg_r = dg_r * 0.995;
+  dg_r < 0.0 ? dg_r = 0.0;
+) : (
+  dg_r < 1.0 ? (
+    dg_r = dg_r + 0.004;
+    dg_r > 1.0 ? dg_r = 1.0;
+  ) : (
+    (rand(1) < dp) || ((dt_l > 0.0) && (wn < 0.5)) ? (
+      dt_r = 80.0 + an * 500.0 * rand(1);
+    );
+  );
+);
+
+// -----------------------------------------------------------------------------
+//  6. CIRCULAR BUFFER — WRITE AND MODULATED READ
+//
+//  Write position advances by 1 each sample.
+//  Read position = write - offset, where offset is the modulated delay value.
+//  Linear interpolation between adjacent integer samples provides
+//  sub-sample accuracy for smooth pitch modulation without zipper noise.
+// -----------------------------------------------------------------------------
+
+// Save dry signal before any processing
+dry_l = spl0;
+dry_r = spl1;
+
+// Write current sample into buffer
+buf_l[wp_l] = spl0;
+buf_r[wp_r] = spl1;
+
+// Compute fractional read position and wrap into [0, 8192)
+rp_l = wp_l - ro_l + 8192;
+rp_l >= 8192 ? rp_l = rp_l - 8192;
+rp_l < 0     ? rp_l = rp_l + 8192;
+
+// Linear interpolation — left
+i0 = floor(rp_l);
+fc = rp_l - i0;
+i1 = (i0 + 1) & 8191;
+wet_l = buf_l[i0] + fc * (buf_l[i1] - buf_l[i0]);
+
+// Compute fractional read position — right
+rp_r = wp_r - ro_r + 8192;
+rp_r >= 8192 ? rp_r = rp_r - 8192;
+rp_r < 0     ? rp_r = rp_r + 8192;
+
+// Linear interpolation — right
+i0 = floor(rp_r);
+fc = rp_r - i0;
+i1 = (i0 + 1) & 8191;
+wet_r = buf_r[i0] + fc * (buf_r[i1] - buf_r[i0]);
+
+// Apply amplitude drift and dropout gain
+wet_l = wet_l * am_l * dg_l;
+wet_r = wet_r * am_r * dg_r;
+
+// Advance write heads
+wp_l = (wp_l + 1) & 8191;
+wp_r = (wp_r + 1) & 8191;
+
+// -----------------------------------------------------------------------------
+//  7. TONE SHAPING
+//
+//  Tone = 0.5 (50) : flat — signal passes unmodified
+//  Tone < 0.5      : progressive low-pass darkening
+//                    Cutoff: 20 kHz (Tone=50) → 2 kHz (Tone=0)
+//  Tone > 0.5      : subtle high-frequency shelf boost
+//                    Derived from a 5 kHz HP extraction filter
+//
+//  Additionally, Age applies its own independent LP darkening on top,
+//  simulating worn tape-head frequency response.
+//  Cutoff: 18 kHz (Age=0) → 4 kHz (Age=100). Blend: up to 50%.
+// -----------------------------------------------------------------------------
+dark   = 0.0;
+tn < 0.5 ? dark   = (0.5 - tn) * 2.0;   // 0.0 (Tone=50) → 1.0 (Tone=0)
+bright = 0.0;
+tn > 0.5 ? bright = (tn - 0.5) * 2.0;   // 0.0 (Tone=50) → 1.0 (Tone=100)
+
+// Dark low-pass filter (1-pole)
+lp_fc = 20000.0 - dark * 18000.0;
+lp_c  = exp(-6.28318 * lp_fc * isr);
+tlp_l = tlp_l * lp_c + wet_l * (1.0 - lp_c);
+tlp_r = tlp_r * lp_c + wet_r * (1.0 - lp_c);
+
+// HF extraction filter for bright boost (1-pole LP at 5 kHz)
+// High-frequency content = signal minus this LP output
+hp_c  = exp(-6.28318 * 5000.0 * isr);
+hlp_l = hlp_l * hp_c + wet_l * (1.0 - hp_c);
+hlp_r = hlp_r * hp_c + wet_r * (1.0 - hp_c);
+
+// Assemble tonal output
+toned_l = wet_l*(1.0-dark) + tlp_l*dark + (wet_l-hlp_l)*bright*0.3;
+toned_r = wet_r*(1.0-dark) + tlp_r*dark + (wet_r-hlp_r)*bright*0.3;
+
+// Age darkening (independent LP, blended up to 50%)
+age_fc = 18000.0 - an * 14000.0;
+age_fc < 500.0 ? age_fc = 500.0;
+age_c  = exp(-6.28318 * age_fc * isr);
+alp_l  = alp_l * age_c + toned_l * (1.0 - age_c);
+alp_r  = alp_r * age_c + toned_r * (1.0 - age_c);
+age_m  = an * 0.5;
+toned_l = toned_l * (1.0 - age_m) + alp_l * age_m;
+toned_r = toned_r * (1.0 - age_m) + alp_r * age_m;
+
+// -----------------------------------------------------------------------------
+//  8. DIRT — SOFT SATURATION + NOISE FLOOR
+//
+//  Soft saturation uses a tanh approximation:
+//    tanh(x) ≈ x * (27 + x²) / (27 + 9x²)
+//  Input is scaled by drive (1.0–3.0), output is compensated by the same
+//  factor to preserve unity gain at low Dirt values.
+//
+//  Noise floor activates above Dirt = 40% and scales linearly to a maximum
+//  of ~0.000072 RMS at Dirt = 100 (approximately -83 dBFS).
+// -----------------------------------------------------------------------------
+sat = 1.0 + dn * 2.0;   // drive: 1.0 (Dirt=0) → 3.0 (Dirt=100)
+
+// Left channel soft clip
+sv = toned_l * sat;
+sv >  1.5 ? sv =  1.5;
+sv < -1.5 ? sv = -1.5;
+toned_l = sv * (27.0 + sv*sv) / (27.0 + 9.0*sv*sv) / sat;
+
+// Right channel soft clip
+sv = toned_r * sat;
+sv >  1.5 ? sv =  1.5;
+sv < -1.5 ? sv = -1.5;
+toned_r = sv * (27.0 + sv*sv) / (27.0 + 9.0*sv*sv) / sat;
+
+// Noise floor (active above Dirt = 40%)
+dn > 0.4 ? (
+  noise_a = (dn - 0.4) * 0.00012;
+  toned_l = toned_l + (rand(2)-1) * noise_a;
+  toned_r = toned_r + (rand(2)-1) * noise_a;
+);
+
+// -----------------------------------------------------------------------------
+//  9. DRY/WET MIX AND OUTPUT GAIN
+// -----------------------------------------------------------------------------
+out_l = dry_l * (1.0 - xn) + toned_l * xn;
+out_r = dry_r * (1.0 - xn) + toned_r * xn;
+
+out_l = out_l * og;
+out_r = out_r * og;
+
+// Safety clamp — prevents downstream clipping from extreme settings
+out_l >  2.0 ? out_l =  2.0;
+out_l < -2.0 ? out_l = -2.0;
+out_r >  2.0 ? out_r =  2.0;
+out_r < -2.0 ? out_r = -2.0;
+
+spl0 = out_l;
+spl1 = out_r;
+
