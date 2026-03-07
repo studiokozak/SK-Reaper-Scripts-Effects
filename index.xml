@@ -15,7 +15,7 @@
   </category>
 
   <category name="LoFi">
-    <reapack name="SK Analog Drift Engine.jsfx" type="effect" desc="SK Analog Drift Engine : Analog tape and cassette drift simulator with wow, flutter and saturation">
+    <reapack name="SK Analog Drift Engine" type="effect" desc="SK Analog Drift Engine : Analog tape and cassette drift simulator with wow, flutter and saturation">
       <version name="1.0" author="Studio Kozak" time="2026-03-07">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Effects/SK%20Analog%20Drift%20Engine.jsfx</source>
       </version>
