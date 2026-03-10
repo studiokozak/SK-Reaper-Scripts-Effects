@@ -8,7 +8,7 @@
       </version>
     </reapack>
     <reapack name="SK Harmonic Compass.lua" type="script" desc="SK Harmonic Compass : Circle of fifths chord inserter with voicing, modes and patterns">
-      <version name="1.0" author="Studio Kozak" time="2026-03-07">
+      <version name="2.0" author="Studio Kozak" time="2026-03-07">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Harmonic%20Compass.lua</source>
       </version>
     </reapack>
