@@ -1,7 +1,7 @@
 -- @description SK Harmonic Compass
 -- @author      Studio Kozak
--- @version     2.0
--- @changelog   v2.0 — Add Listen Mode
+-- @version     2.1
+-- @changelog   v2.1 — Listen Mode extended
 
 
 
@@ -1592,14 +1592,15 @@ function loop()
           chord_root, chord_name, chords[cidx][2], false)
         local neg_name, neg_list = get_chord_display(
           chord_root, chord_name, chords[cidx][2], true)
-        reaper.ImGui_BeginTooltip(ctx)
+        if reaper.ImGui_BeginTooltip(ctx) then
           reaper.ImGui_Text(ctx,
             full_name .. " :  " .. table.concat(note_list, " - "))
           reaper.ImGui_Text(ctx,
             "Neg : " .. neg_name .. "  " .. table.concat(neg_list, " - "))
           reaper.ImGui_Text(ctx,
             "L-Click = insert  |  R-Click = substitutions  |  Shift+L = neg. harmony")
-        reaper.ImGui_EndTooltip(ctx)
+          reaper.ImGui_EndTooltip(ctx)
+        end
       end
 
       if i < 7 then reaper.ImGui_SameLine(ctx) end
