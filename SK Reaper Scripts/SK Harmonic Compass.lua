@@ -1,6 +1,7 @@
 -- @description SK Harmonic Compass
 -- @author      Studio Kozak
--- @version     1.0
+-- @version     2.0
+-- @changelog   v2.0 — Add Listen Mode
 
 
 
@@ -43,7 +44,18 @@ local major_mode_idx      = 1     -- Index into major_modes table.
 local pattern_idx         = 1     -- Selected rhythmic pattern (1 = Block).
 local humanize_idx        = 1     -- Humanization level: 1=Off, 2=Med, 3=High.
 
-
+-- ============================================================
+-- SECTION 3b — LISTEN MODE STATE
+-- ============================================================
+local listen_mode         = false  -- Toggle: true = preview on hover active.
+local listen_hovered_deg  = nil    -- Degree index (1–7) currently being previewed, or nil.
+local listen_hovered_shift= nil    -- Shift state at last degree preview (true/false/nil).
+local listen_hovered_sub  = nil    -- String key of the substitution MenuItem being previewed,
+                                   -- or nil.  Format: "family:index" e.g. "tri:1", "dia:2".
+local listen_notes        = {}     -- MIDI note numbers currently sounding (for Note Off).
+local listen_end_time     = 0      -- reaper.time_precise() deadline for Note Off.
+local listen_track_state  = nil    -- Saved track arm/monitoring state, restored on toggle-off.
+                                   -- { armed, monitoring }
 
 -- ============================================================
 -- SECTION 4a — NOTE DURATIONS
@@ -109,184 +121,95 @@ local patterns = {
     end,
   },
 
-  -- 2. SPREAD
-  -- Notes fan out bottom-to-top in a rapid strum, each sustaining
-  -- to the end.  Stagger = one 32nd note per voice.
-  -- Simulates a guitarist strumming or a harpist rolling a chord.
-  -- Velocity: bass strong, upper voices taper slightly.
+  -- 2. ANTICIPATE
+  -- The chord lands one eighth note BEFORE the barline — a classic
+  -- anticipation that pulls the harmony forward into the next beat.
+  -- Bass holds through, upper voices hit early then sustain to end.
+  -- Universal technique in jazz, soul, and modern pop production.
+  -- min_beats = 1 to leave room for the anticipation offset.
   {
-    name      = "Spread",
-    min_beats = 0.25,   -- Needs at least a 16th note.
-    fn = function(notes, B, D)
-      local evts   = {}
-      local N      = #notes
-      local stagger = r(B / 8)   -- One 32nd note between each voice.
-      local vels    = { 95, 88, 82, 78, 74, 70, 68 }
-      for i, midi_n in ipairs(notes) do
-        local ts = r((i - 1) * stagger)
-        local vel = vels[math.min(i, #vels)]
-        evts[#evts+1] = { midi=midi_n, ts=ts, te=D, vel=vel }
-      end
-      return evts
-    end,
-  },
-
-  -- 3. JAZZ COMP
-  -- Two syncopated stabs inspired by McCoy Tyner / Bill Evans comping.
-  -- Bass holds full duration to anchor the harmony.
-  -- Upper voices hit on the "2 and" and "4 and" (eighth-note offbeats).
-  -- Stab durations are a dotted eighth each.
-  {
-    name      = "Jazz Comp",
-    min_beats = 2,
-    fn = function(notes, B, D)
-      local evts  = {}
-      local N     = #notes
-      local E     = r(B / 2)       -- Eighth note.
-      local DE    = r(B * 0.75)    -- Dotted eighth.
-      -- Bass: full duration, strong velocity.
-      evts[#evts+1] = { midi=notes[1], ts=0, te=D, vel=90 }
-      -- First stab: "2 and" = 1.5 beats in.
-      local t1s = r(B * 1.5)
-      for i = 2, N do
-        evts[#evts+1] = { midi=notes[i], ts=t1s, te=t1s+DE, vel=78 }
-      end
-      -- Second stab: "4 and" = 3.5 beats in.
-      local t2s = r(B * 3.5)
-      for i = 2, N do
-        evts[#evts+1] = { midi=notes[i], ts=t2s, te=t2s+DE, vel=82 }
-      end
-      return evts
-    end,
-  },
-
-  -- 4. BOSSA
-  -- Classic bossa nova cell over two beats:
-  --   Bass  on beat 1          (quarter note)
-  --   Chord on "1 and"         (eighth)
-  --   Chord on beat 2          (quarter)
-  --   Bass  on "2 and"         (eighth)
-  --   Chord on beat 3          (quarter) — second bar of cell
-  --   Chord on "4 and"         (eighth)
-  -- Inspired by João Gilberto's guitar comping.
-  {
-    name      = "Bossa",
-    min_beats = 4,
-    fn = function(notes, B, D)
-      local evts = {}
-      local N    = #notes
-      local E    = r(B / 2)    -- Eighth note.
-      local Q    = B           -- Quarter note.
-      local QD   = r(B * 0.85) -- Slightly short quarter for breathing room.
-      -- Beat 1: bass.
-      evts[#evts+1] = { midi=notes[1], ts=0, te=r(Q*0.9), vel=88 }
-      -- "1 and": upper voices.
-      for i=2,N do evts[#evts+1]={midi=notes[i],ts=E,te=E+r(Q*0.8),vel=72} end
-      -- Beat 2: upper voices.
-      for i=2,N do evts[#evts+1]={midi=notes[i],ts=Q,te=Q+QD,vel=76} end
-      -- "2 and": bass.
-      evts[#evts+1] = { midi=notes[1], ts=r(B*1.5), te=r(B*1.5)+r(Q*0.8), vel=82 }
-      -- Beat 3: upper voices.
-      for i=2,N do evts[#evts+1]={midi=notes[i],ts=r(B*2),te=r(B*2)+QD,vel=74} end
-      -- "3 and": bass.
-      evts[#evts+1] = { midi=notes[1], ts=r(B*2.5), te=r(B*2.5)+r(Q*0.8), vel=80 }
-      -- Beat 4: upper voices.
-      for i=2,N do evts[#evts+1]={midi=notes[i],ts=r(B*3),te=r(B*3)+QD,vel=70} end
-      -- "4 and": upper voices (anticipation).
-      for i=2,N do evts[#evts+1]={midi=notes[i],ts=r(B*3.5),te=r(B*3.5)+E,vel=68} end
-      return evts
-    end,
-  },
-
-  -- 5. SLOW BURN
-  -- Bass enters on beat 1 and holds the full duration.
-  -- Upper voices enter one by one on successive quarter-note beats,
-  -- each holding to the end — building a lush sustained texture.
-  -- Velocity: bass strong, each entering voice slightly softer.
-  {
-    name      = "Slow Burn",
-    min_beats = 2,
-    fn = function(notes, B, D)
-      local evts = {}
-      local N    = #notes
-      local vels = { 92, 82, 76, 72, 68, 65, 62 }
-      -- Bass: immediate, full duration.
-      evts[#evts+1] = { midi=notes[1], ts=0, te=D, vel=vels[1] }
-      -- Upper voices: enter on successive beats.
-      for i = 2, N do
-        local ts = r(B * (i - 1))
-        evts[#evts+1] = { midi=notes[i], ts=ts, te=D,
-          vel=vels[math.min(i, #vels)] }
-      end
-      return evts
-    end,
-  },
-
-  -- 6. OFFBEAT PULSE
-  -- Three chord hits on syncopated eighth-note offbeats, leaving
-  -- the strong beats silent — classic funk / soul keyboard feel.
-  -- Inspired by Bernard Wright, Chic, Nile Rodgers.
-  -- Each hit lasts a 16th note for crisp articulation.
-  {
-    name      = "Offbeat Pulse",
-    min_beats = 2,
-    fn = function(notes, B, D)
-      local evts    = {}
-      local E       = r(B / 2)    -- Eighth note.
-      local S       = r(B / 4)    -- Sixteenth note (hit duration).
-      -- Offbeat positions: "1 and", "2 and", "3 and".
-      local onsets  = { E, r(B*1.5), r(B*2.5) }
-      local vels    = { 85, 78, 82 }
-      for oi, ts in ipairs(onsets) do
-        local te = ts + S
-        for _, midi_n in ipairs(notes) do
-          evts[#evts+1] = { midi=midi_n, ts=ts, te=te, vel=vels[oi] }
-        end
-      end
-      return evts
-    end,
-  },
-
-  -- 7. GHOST NOTES
-  -- Full chord on beat 1 (half-duration), followed by a ghost echo
-  -- on beat 3 — much shorter and softer, like a piano sustain pedal
-  -- catching the tail of the chord.
-  {
-    name      = "Ghost Notes",
-    min_beats = 2,
-    fn = function(notes, B, D)
-      local evts = {}
-      local S    = r(B / 4)    -- Sixteenth note.
-      -- Primary hit: beat 1, lasts slightly less than half the duration.
-      local pri_end = r(B * 0.9)
-      for _, midi_n in ipairs(notes) do
-        evts[#evts+1] = { midi=midi_n, ts=0, te=pri_end, vel=88 }
-      end
-      -- Ghost hit: beat 2, very short, soft.
-      local gs = B
-      for _, midi_n in ipairs(notes) do
-        evts[#evts+1] = { midi=midi_n, ts=gs, te=gs+S, vel=48 }
-      end
-      return evts
-    end,
-  },
-
-  -- 8. CINEMATIC SWELL
-  -- Notes enter bottom-to-top on a decelerating curve (fastest at
-  -- the start, slowing as the chord fills out) — like an orchestral
-  -- tutti building from low strings up to brass and winds.
-  -- Each voice holds to the end of the duration.
-  -- Velocity: bass loudest, high voices taper for blend.
-  {
-    name      = "Cinematic Swell",
+    name      = "Anticipate",
     min_beats = 1,
     fn = function(notes, B, D)
       local evts = {}
       local N    = #notes
-      local vels = { 95, 90, 85, 80, 76, 72, 68 }
-      -- Spread entries across 70% of duration using a sqrt curve
-      -- (fast early entries, slower as we climb).
-      local window = r(B * 2.5)
+      local E    = r(B / 2)        -- Eighth note offset.
+      local late = r(B * 0.92)     -- Slightly shorter than a full beat for breathing room.
+      -- Bass: hits right on the downbeat, holds full duration.
+      evts[#evts+1] = { midi=notes[1], ts=0, te=D, vel=88 }
+      -- Upper voices: anticipated — enter E ticks before the end, sustain to D.
+      -- If D > E the anticipation is meaningful; inserter clamps automatically.
+      local ant = math.max(0, D - E)
+      for i = 2, N do
+        evts[#evts+1] = { midi=notes[i], ts=ant, te=D, vel=82 }
+      end
+      return evts
+    end,
+  },
+
+  -- 3. PUSH & HOLD
+  -- Short punchy hit on beat 1, brief silence, then a soft chord
+  -- lands on the "2 and" and floats to the end.
+  -- Inspired by J Dilla / Madlib keyboard work — slightly off-kilter,
+  -- never lands squarely on the downbeat after the initial stab.
+  {
+    name      = "Push & Hold",
+    min_beats = 2,
+    fn = function(notes, B, D)
+      local evts = {}
+      local N    = #notes
+      local S    = r(B / 4)        -- Sixteenth — short stab duration.
+      local E    = r(B / 2)        -- Eighth note.
+      -- Beat 1: full chord, short and punchy.
+      for _, midi_n in ipairs(notes) do
+        evts[#evts+1] = { midi=midi_n, ts=0, te=S, vel=96 }
+      end
+      -- "2 and": soft chord floats to the end.
+      local t2 = r(B * 1.5)
+      for _, midi_n in ipairs(notes) do
+        evts[#evts+1] = { midi=midi_n, ts=t2, te=D, vel=70 }
+      end
+      return evts
+    end,
+  },
+
+  -- 4. STAB x2
+  -- Two crisp stabs on irregular syncopated positions —
+  -- beat 1 and the "3 and" — leaving the rest of the bar open.
+  -- Minimalist comping; gives the rhythm section room to breathe.
+  -- Works equally well in neo-soul, hip-hop, and modern jazz.
+  {
+    name      = "Stab x2",
+    min_beats = 2,
+    fn = function(notes, B, D)
+      local evts = {}
+      local S    = r(B * 0.4)      -- Slightly longer than a 16th for warmth.
+      -- Stab 1: beat 1, strong.
+      for _, midi_n in ipairs(notes) do
+        evts[#evts+1] = { midi=midi_n, ts=0, te=S, vel=92 }
+      end
+      -- Stab 2: "3 and" = 2.5 beats in, slightly softer.
+      local t2 = r(B * 2.5)
+      for _, midi_n in ipairs(notes) do
+        evts[#evts+1] = { midi=midi_n, ts=t2, te=t2+S, vel=80 }
+      end
+      return evts
+    end,
+  },
+
+  -- 5. SWELL
+  -- Notes enter bottom-to-top on a decelerating square-root curve,
+  -- each sustaining to the end — fast at the bottom, slowing as the
+  -- chord fills out.  Feels orchestral, like strings or a pad opening.
+  -- Great for tension builds and cinematic transitions.
+  {
+    name      = "Swell",
+    min_beats = 1,
+    fn = function(notes, B, D)
+      local evts  = {}
+      local N     = #notes
+      local vels  = { 92, 86, 80, 76, 72, 68, 65 }
+      local window = r(B * 1.8)    -- Entry spread: 1.8 beats.
       for i, midi_n in ipairs(notes) do
         local frac = (i - 1) / math.max(N - 1, 1)
         local ts   = r(window * (1 - math.sqrt(1 - frac)))
@@ -297,159 +220,21 @@ local patterns = {
     end,
   },
 
-  -- 9. STRIDE
-  -- Classic stride piano: bass octave on beats 1 & 3, mid-voice
-  -- chord on beats 2 & 4.  Requires a full bar (4 beats).
-  -- Velocity: bass hits strong, chord hits lighter.
+  -- 6. ROLL
+  -- Fast upward arpeggio — each note enters one 32nd note after the
+  -- previous, all sustaining to the end.  Like a pianist rolling a
+  -- chord from the wrist, or a guitarist strumming up.
+  -- Very natural, one-shot gesture.
   {
-    name      = "Stride",
-    min_beats = 4,
-    fn = function(notes, B, D)
-      local evts = {}
-      local N    = #notes
-      local blen = r(B * 0.85)   -- Bass note duration (slightly short).
-      local clen = r(B * 0.80)   -- Chord duration.
-      -- Beat 1: bass.
-      evts[#evts+1] = { midi=notes[1], ts=0, te=blen, vel=92 }
-      -- Beat 2: upper voices.
-      for i = 2, N do
-        evts[#evts+1] = { midi=notes[i], ts=B, te=B+clen, vel=76 }
-      end
-      -- Beat 3: bass.
-      evts[#evts+1] = { midi=notes[1], ts=r(B*2), te=r(B*2)+blen, vel=88 }
-      -- Beat 4: upper voices.
-      for i = 2, N do
-        evts[#evts+1] = { midi=notes[i], ts=r(B*3), te=r(B*3)+clen, vel=74 }
-      end
-      return evts
-    end,
-  },
-
-  -- 10. NEO-SOUL COMP
-  -- Inspired by Robert Glasper, Thundercat, Kiefer.
-  -- Anticipated chord on the "1 and", bass re-enters on beat 2,
-  -- syncopated upper voices on "3 and", bass anchors on beat 4.
-  -- Very fluid, never lands squarely on the downbeat.
-  {
-    name      = "Neo-Soul Comp",
-    min_beats = 4,
-    fn = function(notes, B, D)
-      local evts = {}
-      local N    = #notes
-      local E    = r(B / 2)     -- Eighth note.
-      local DE   = r(B * 0.75)  -- Dotted eighth.
-      local S    = r(B / 4)     -- Sixteenth note.
-      -- "1 and": full chord anticipation, slightly soft.
-      for _, midi_n in ipairs(notes) do
-        evts[#evts+1] = { midi=midi_n, ts=E, te=E+DE, vel=80 }
-      end
-      -- Beat 2: bass re-enters strong.
-      evts[#evts+1] = { midi=notes[1], ts=B, te=r(B*1.8), vel=90 }
-      -- "2 and": upper voices, medium.
-      for i = 2, N do
-        evts[#evts+1] = { midi=notes[i], ts=r(B*1.5), te=r(B*1.5)+DE, vel=74 }
-      end
-      -- "3 and": syncopated upper stab.
-      for i = 2, N do
-        evts[#evts+1] = { midi=notes[i], ts=r(B*2.5), te=r(B*2.5)+DE, vel=82 }
-      end
-      -- Beat 4: bass anchors.
-      evts[#evts+1] = { midi=notes[1], ts=r(B*3), te=r(B*3.8), vel=86 }
-      -- "4 and": light upper anticipation into next chord.
-      for i = 2, N do
-        evts[#evts+1] = { midi=notes[i], ts=r(B*3.5), te=r(B*3.5)+S, vel=65 }
-      end
-      return evts
-    end,
-  },
-
-  -- 11. LO-FI BOUNCE
-  -- Laid-back swing feel: bass on beat 1, chord slightly delayed
-  -- on the "2 and" (swung), ghost chord on the "3 and", bass
-  -- returns softly on beat 4.  Style lo-fi hip-hop / Nujabes.
-  -- Swing ratio: eighth-note pairs at ~65/35.
-  {
-    name      = "Lo-Fi Bounce",
-    min_beats = 4,
-    fn = function(notes, B, D)
-      local evts  = {}
-      local N     = #notes
-      local swing = r(B * 0.65)  -- Swung eighth (long).
-      local short = r(B * 0.32)  -- Swung eighth (short).
-      local S     = r(B / 4)     -- Sixteenth.
-      -- Beat 1: bass, relaxed.
-      evts[#evts+1] = { midi=notes[1], ts=0, te=r(B*0.85), vel=84 }
-      -- Swung "1 and": upper voices land late.
-      for i = 2, N do
-        evts[#evts+1] = { midi=notes[i], ts=swing, te=swing+r(B*0.6), vel=72 }
-      end
-      -- Beat 2: bass light.
-      evts[#evts+1] = { midi=notes[1], ts=B, te=r(B*1.8), vel=70 }
-      -- Swung "2 and": upper voices.
-      for i = 2, N do
-        evts[#evts+1] = { midi=notes[i], ts=B+swing, te=B+swing+r(B*0.5), vel=76 }
-      end
-      -- Beat 3: bass, mid-strength.
-      evts[#evts+1] = { midi=notes[1], ts=r(B*2), te=r(B*2.8), vel=80 }
-      -- "3 and" ghost: upper voices very soft.
-      for i = 2, N do
-        evts[#evts+1] = { midi=notes[i], ts=r(B*2)+swing, te=r(B*2)+swing+S, vel=48 }
-      end
-      -- Beat 4: bass soft, easing out.
-      evts[#evts+1] = { midi=notes[1], ts=r(B*3), te=r(B*3.7), vel=68 }
-      -- Swung "4 and": light chord.
-      for i = 2, N do
-        evts[#evts+1] = { midi=notes[i], ts=r(B*3)+swing, te=r(B*3)+swing+S, vel=62 }
-      end
-      return evts
-    end,
-  },
-
-  -- 12. AFROBEAT STAB
-  -- Inspired by Fela Kuti / Tony Allen.  Percussive and sparse:
-  -- sharp chord stabs on the offbeats only, leaving the downbeats
-  -- completely open.  Bass holds the whole bar for harmonic grounding.
-  -- Stabs are very short (sixteenth notes) for maximum rhythmic punch.
-  {
-    name      = "Afrobeat Stab",
-    min_beats = 4,
-    fn = function(notes, B, D)
-      local evts = {}
-      local N    = #notes
-      local E    = r(B / 2)    -- Eighth note.
-      local S    = r(B / 4)    -- Sixteenth (stab duration).
-      -- Bass: full duration, strong.
-      evts[#evts+1] = { midi=notes[1], ts=0, te=D, vel=90 }
-      -- Offbeat stabs: "1 and", "2 and", "4 and" (beat 3 is silent).
-      local stab_pos = { E, r(B*1.5), r(B*3.5) }
-      local stab_vel = { 88, 80, 84 }
-      for si, ts in ipairs(stab_pos) do
-        for i = 2, N do
-          evts[#evts+1] = { midi=notes[i], ts=ts, te=ts+S, vel=stab_vel[si] }
-        end
-      end
-      return evts
-    end,
-  },
-
-  -- 13. MODAL FLOATING
-  -- Inspired by Miles Davis "Kind of Blue" / Herbie Hancock "Maiden Voyage".
-  -- Notes enter in irregular long waves — no rhythmic grid, just texture.
-  -- Each note is spaced by a minor third of a beat (B*0.33) from the next,
-  -- with a small prime-number offset to avoid mechanical regularity.
-  -- All notes hold to the end.  Very airy, impressionistic.
-  {
-    name      = "Modal Floating",
-    min_beats = 2,
+    name      = "Roll",
+    min_beats = 0.25,
     fn = function(notes, B, D)
       local evts   = {}
       local N      = #notes
-      local vels   = { 78, 72, 68, 65, 62, 60, 58 }
-      -- Irregular entry spacings in thirds-of-a-beat, offset by primes.
-      local gaps   = { 0, r(B*0.37), r(B*0.61), r(B*0.97),
-                       r(B*1.19), r(B*1.43), r(B*1.73) }
+      local stagger = r(B / 8)     -- 32nd note between each voice.
+      local vels    = { 88, 84, 80, 77, 74, 71, 68 }
       for i, midi_n in ipairs(notes) do
-        local ts = gaps[math.min(i, #gaps)]
+        local ts = r((i - 1) * stagger)
         evts[#evts+1] = { midi=midi_n, ts=ts, te=D,
           vel=vels[math.min(i, #vels)] }
       end
@@ -457,123 +242,105 @@ local patterns = {
     end,
   },
 
-  -- 14. TRAP CHORD
-  -- Minimal and precise: very short chord hit on beat 1 (almost
-  -- percussive), silence, then a soft repeat on "2 and", and a
-  -- final anticipation hit on "4 and".  Style trap / drill.
-  -- Upper voices only on repeats — bass anchors the whole bar.
+  -- 7. PULSE 8TH
+  -- The chord repeats on every eighth note for the full duration,
+  -- with alternating strong/soft velocities (downbeat vs upbeat).
+  -- Creates a hypnotic, driving groove — house, deep techno, soul.
+  -- Each hit is a 16th note long for crisp separation.
   {
-    name      = "Trap Chord",
-    min_beats = 4,
+    name      = "Pulse 8th",
+    min_beats = 1,
+    fn = function(notes, B, D)
+      local evts    = {}
+      local E       = r(B / 2)     -- Eighth note interval.
+      local S       = r(B / 4)     -- 16th note duration per hit.
+      local n_hits  = math.floor(D / E)
+      local vels_db = { 90, 72 }   -- Alternating: downbeat strong, upbeat soft.
+      for k = 0, n_hits - 1 do
+        local ts  = r(k * E)
+        local vel = vels_db[(k % 2) + 1]
+        for _, midi_n in ipairs(notes) do
+          evts[#evts+1] = { midi=midi_n, ts=ts, te=ts+S, vel=vel }
+        end
+      end
+      return evts
+    end,
+  },
+
+  -- 8. DRUNK
+  -- Full chord on beat 1, then two ghost repeats at intentionally
+  -- irregular (non-quantized) timing — slightly late, asymmetric.
+  -- Inspired by J Dilla's "drunk" feel applied to chord stabs.
+  -- The irregularity is deterministic (not random) so the feel is
+  -- consistent across multiple insertions of the same pattern.
+  {
+    name      = "Drunk",
+    min_beats = 2,
     fn = function(notes, B, D)
       local evts = {}
-      local N    = #notes
-      local S    = r(B / 4)     -- Sixteenth (short stab).
-      local E    = r(B / 2)     -- Eighth.
-      -- Beat 1: full chord, very short and punchy.
+      local S    = r(B * 0.35)     -- Short stab, slightly longer than a 16th.
+      -- Beat 1: on the grid, strong.
       for _, midi_n in ipairs(notes) do
-        evts[#evts+1] = { midi=midi_n, ts=0, te=S, vel=95 }
+        evts[#evts+1] = { midi=midi_n, ts=0, te=S, vel=94 }
       end
-      -- Bass holds through the bar.
-      evts[#evts+1] = { midi=notes[1], ts=0, te=D, vel=88 }
-      -- "2 and": upper voices only, soft.
-      for i = 2, N do
-        evts[#evts+1] = { midi=notes[i], ts=r(B*1.5), te=r(B*1.5)+S, vel=62 }
+      -- Ghost 1: deliberately late — sits between "1 and" and beat 2.
+      local t1 = r(B * 0.72)
+      for _, midi_n in ipairs(notes) do
+        evts[#evts+1] = { midi=midi_n, ts=t1, te=t1+S, vel=62 }
       end
-      -- "3 and": ghost, very soft.
-      for i = 2, N do
-        evts[#evts+1] = { midi=notes[i], ts=r(B*2.5), te=r(B*2.5)+S, vel=48 }
-      end
-      -- "4 and": anticipation stab, medium.
-      for i = 2, N do
-        evts[#evts+1] = { midi=notes[i], ts=r(B*3.5), te=r(B*3.5)+E, vel=78 }
+      -- Ghost 2: also irregular — lands just after "2 and".
+      local t2 = r(B * 1.58)
+      for _, midi_n in ipairs(notes) do
+        evts[#evts+1] = { midi=midi_n, ts=t2, te=t2+S, vel=54 }
       end
       return evts
     end,
   },
 
-  -- 15. POLYRHYTHM 3:2
-  -- Bass line plays 3 equally-spaced hits (triplets) across the bar
-  -- while upper voices play 2 equally-spaced hits (half-notes).
-  -- The two layers create a cross-rhythm — inspired by Steve Reich,
-  -- Pat Metheny, African polyrhythmic traditions.
+  -- 9. BREATH
+  -- Full chord on beat 1, a silence (the "breath"), then a softer
+  -- re-attack on beat 3 that sustains to the end.
+  -- Mimics the natural phrasing of a singer or horn player — attack,
+  -- release, inhale, resolve.  Works in any tempo and style.
   {
-    name      = "Polyrhythm 3:2",
-    min_beats = 4,
+    name      = "Breath",
+    min_beats = 2,
     fn = function(notes, B, D)
-      local evts  = {}
-      local N     = #notes
-      local trip  = r(B * 4 / 3)   -- Triplet quarter (4 beats / 3 hits).
-      local half  = r(B * 2)       -- Half note (4 beats / 2 hits).
-      local blen  = r(trip * 0.85)
-      local clen  = r(half * 0.80)
-      -- Bass: 3 triplet hits.
-      for k = 0, 2 do
-        local ts = r(k * trip)
-        evts[#evts+1] = { midi=notes[1], ts=ts, te=ts+blen,
-          vel= k==0 and 92 or 82 }
+      local evts   = {}
+      local phrase = r(B * 0.85)   -- First phrase ends just before beat 2.
+      -- Beat 1: full chord, confident.
+      for _, midi_n in ipairs(notes) do
+        evts[#evts+1] = { midi=midi_n, ts=0, te=phrase, vel=92 }
       end
-      -- Upper voices: 2 equally-spaced hits.
-      for k = 0, 1 do
-        local ts = r(k * half)
-        for i = 2, N do
-          evts[#evts+1] = { midi=notes[i], ts=ts, te=ts+clen,
-            vel= k==0 and 80 or 74 }
+      -- Beat 3 (re-attack): softer, sustains to end.
+      local t2 = r(B * 2)
+      if t2 < D then
+        for _, midi_n in ipairs(notes) do
+          evts[#evts+1] = { midi=midi_n, ts=t2, te=D, vel=72 }
         end
       end
       return evts
     end,
   },
 
-  -- 16. REGGAE SKANK
-  -- Classic reggae / ska keyboard skank: upper voices only on the
-  -- offbeats ("1 and", "2 and", "3 and", "4 and"), bass holds the
-  -- whole bar.  Beats 1, 2, 3, 4 are completely silent in the upper
-  -- register — the negative space is the feel.
+  -- 10. CHOP
+  -- Four evenly-spaced 32nd-note stabs across the bar — very short,
+  -- very tight.  Evokes the sound of a chopped soul sample: the chord
+  -- flickers rather than sustains.  Madlib / Pete Rock aesthetic.
+  -- Velocities vary to avoid a mechanical feel.
   {
-    name      = "Reggae Skank",
-    min_beats = 4,
-    fn = function(notes, B, D)
-      local evts = {}
-      local N    = #notes
-      local E    = r(B / 2)    -- Eighth note.
-      local S    = r(B / 4)    -- Sixteenth (skank duration — tight).
-      -- Bass: full duration, solid.
-      evts[#evts+1] = { midi=notes[1], ts=0, te=D, vel=88 }
-      -- Offbeat skanks on all four "ands".
-      local vels = { 84, 78, 80, 76 }
-      for k = 0, 3 do
-        local ts = r(k * B + E)
-        for i = 2, N do
-          evts[#evts+1] = { midi=notes[i], ts=ts, te=ts+S, vel=vels[k+1] }
-        end
-      end
-      return evts
-    end,
-  },
-
-  -- 17. AMBIENT CLUSTER
-  -- Notes enter one by one on a logarithmic curve — very slow at first,
-  -- then faster as the chord fills out — each holding to the end.
-  -- Creates a slowly evolving harmonic cloud.
-  -- Inspired by Brian Eno "Ambient 1", Harold Budd, Arvo Pärt.
-  {
-    name      = "Ambient Cluster",
+    name      = "Chop",
     min_beats = 2,
     fn = function(notes, B, D)
       local evts  = {}
-      local N     = #notes
-      local vels  = { 65, 60, 56, 52, 50, 48, 46 }
-      -- Window: use 80% of the duration for entries, last 20% is pure sustain.
-      local window = r(D * 0.80)
-      for i, midi_n in ipairs(notes) do
-        local frac = (i - 1) / math.max(N - 1, 1)
-        -- Logarithmic curve: log(1 + frac * 9) / log(10)
-        -- → 0 at frac=0, 1 at frac=1, compressed near the end.
-        local log_frac = math.log(1 + frac * 9) / math.log(10)
-        local ts = r(window * log_frac)
-        evts[#evts+1] = { midi=midi_n, ts=ts, te=D,
-          vel=vels[math.min(i, #vels)] }
+      local chop  = r(B / 8)       -- 32nd note — stab duration.
+      local gap   = r(D / 4)       -- Four equal chops across the duration.
+      local vels  = { 90, 76, 84, 70 }
+      for k = 0, 3 do
+        local ts = r(k * gap)
+        for _, midi_n in ipairs(notes) do
+          evts[#evts+1] = { midi=midi_n, ts=ts, te=ts+chop, vel=vels[k+1] }
+        end
       end
       return evts
     end,
@@ -590,14 +357,10 @@ end)()
 -- ============================================================
 -- SECTION 4a-ter — PATTERN INSERTER
 --
--- Called from insert_chord_custom() in place of the bare
--- MIDI_InsertNote loop.
---
--- 1. Derives ppq_per_beat from the project tempo at cursor position.
--- 2. Checks that the chosen duration meets the pattern's min_beats.
---    If not: shows a modal warning and returns false (no insertion).
--- 3. Calls the pattern function to get {midi, ts, te, vel} events.
--- 4. Clamps each event to [q_s, q_e] and inserts via MIDI_InsertNote.
+-- Validates that the chosen duration meets the pattern's min_beats
+-- requirement, applies humanization, then calls the pattern function
+-- to generate {midi, ts, te, vel} events and inserts them into the
+-- take via MIDI_InsertNote.
 -- Returns true on success, false if the duration check failed.
 -- ============================================================
 local function insert_pattern(take, voiced_notes, q_s, q_e, cursor_pos)
@@ -648,7 +411,7 @@ local function insert_pattern(take, voiced_notes, q_s, q_e, cursor_pos)
       local v_off = (h.vel_var > 0)
                     and math.random(-h.vel_var,    h.vel_var)    or 0
       ts  = ts  + t_off
-      te  = te  + t_off + d_off   -- Duration shift is independent of onset.
+      te  = te  + t_off + d_off
       vel = math.max(1, math.min(127, vel + v_off))
     end
     return ts, te, vel
@@ -927,6 +690,135 @@ function apply_voicing(root_midi, intervals, vidx)
 end
 
 -- ============================================================
+-- SECTION 7b — LISTEN MODE ENGINE
+--
+-- listen_note_off()
+--   Sends MIDI Note Off (0x80) for every note currently stored in
+--   listen_notes, then clears the table and resets the timer.
+--   Safe to call even when listen_notes is empty.
+--
+-- listen_note_on(voiced_notes)
+--   Sends MIDI Note On (0x90) for each note in voiced_notes at
+--   velocity 90, stores them in listen_notes, and sets listen_end_time
+--   to now + the currently selected duration (in seconds).
+--   Calls listen_note_off() first to silence any previously ringing notes.
+--
+-- listen_tick()
+--   Must be called every frame from the main loop.
+--   Checks whether listen_end_time has elapsed and triggers Note Off
+--   if it has, regardless of whether the mouse is still hovering.
+--
+-- listen_arm_track(track)
+--   Saves the current arm + monitoring state of the track, then arms
+--   it and enables input monitoring (mode 1 = monitor input).
+--
+-- listen_restore_track()
+--   Restores the saved arm + monitoring state.  Called when Listen is
+--   toggled off or the script closes.
+-- ============================================================
+
+local function listen_note_off()
+  for _, midi_n in ipairs(listen_notes) do
+    reaper.StuffMIDIMessage(0, 0x80, midi_n, 0)
+  end
+  listen_notes    = {}
+  listen_end_time = 0
+end
+
+local function listen_note_on(voiced_notes)
+  -- Silence previous chord immediately before starting a new one.
+  listen_note_off()
+
+  local duration_sec = (60.0 / reaper.Master_GetTempo()) * duration_mults[duration_idx]
+  listen_end_time    = reaper.time_precise() + duration_sec
+
+  for _, midi_n in ipairs(voiced_notes) do
+    local safe_n = math.max(0, math.min(127, midi_n))
+    reaper.StuffMIDIMessage(0, 0x90, safe_n, 90)
+    listen_notes[#listen_notes + 1] = safe_n
+  end
+end
+
+local function listen_tick()
+  -- If notes are sounding and the timer has expired, send Note Off.
+  if #listen_notes > 0 and reaper.time_precise() >= listen_end_time then
+    listen_note_off()
+    -- Allow re-trigger: clear all hover trackers so the next hover
+    -- fires a fresh preview even if the same item is still under the mouse.
+    listen_hovered_deg   = nil
+    listen_hovered_shift = nil
+    listen_hovered_sub   = nil
+  end
+end
+
+local function listen_arm_track(track)
+  if not track then return end
+  -- Save current state so we can restore it on toggle-off.
+  listen_track_state = {
+    armed      = reaper.GetMediaTrackInfo_Value(track, "I_RECARM"),
+    monitoring = reaper.GetMediaTrackInfo_Value(track, "I_RECMON"),
+  }
+  -- Arm the track.
+  reaper.SetMediaTrackInfo_Value(track, "I_RECARM", 1)
+  -- Enable input monitoring (1 = monitor when armed).
+  reaper.SetMediaTrackInfo_Value(track, "I_RECMON", 1)
+end
+
+local function listen_restore_track()
+  local track = reaper.GetSelectedTrack(0, 0)
+  if track and listen_track_state then
+    reaper.SetMediaTrackInfo_Value(track, "I_RECARM",
+      listen_track_state.armed)
+    reaper.SetMediaTrackInfo_Value(track, "I_RECMON",
+      listen_track_state.monitoring)
+  end
+  listen_track_state = nil
+end
+
+-- Compute a voiced note list for a degree without inserting anything.
+-- Mirrors the voicing logic inside insert_chord_custom().
+local function get_voiced_notes_for_preview(chord_root, intervals)
+  local tonic_midi = circle_fifths[selected_root_idx] + (octave + 1) * 12
+  local root_midi  = chord_root + (octave + 1) * 12
+  if root_midi < tonic_midi then root_midi = root_midi + 12 end
+
+  local voiced
+  if not voicing_override and last_bass >= 0 then
+    local base_notes = build_base_notes(root_midi, intervals)
+    voiced, _ = best_voicing_voice_leading(base_notes, last_bass)
+  elseif not voicing_override and last_bass < 0 then
+    local base_notes = build_base_notes(root_midi, intervals)
+    voiced = apply_inversion(base_notes, 0)
+  else
+    voiced = apply_voicing(root_midi, intervals, voicing_idx)
+  end
+  return voiced
+end
+
+-- Same as get_voiced_notes_for_preview() but applies negative harmony
+-- transformation first, mirroring the is_negative branch in insert_chord_custom().
+local function get_voiced_notes_for_preview_neg(chord_root, intervals)
+  local root_tonality = circle_fifths[selected_root_idx]
+
+  local orig_notes = {}
+  for _, iv in ipairs(intervals) do
+    orig_notes[#orig_notes + 1] = (chord_root + iv) % 12
+  end
+  local neg_notes = {}
+  for _, note in ipairs(orig_notes) do
+    neg_notes[#neg_notes + 1] = get_negative_note(note, root_tonality)
+  end
+  table.sort(neg_notes)
+  local neg_root = neg_notes[1]
+  local neg_ivs  = {}
+  for _, note in ipairs(neg_notes) do
+    neg_ivs[#neg_ivs + 1] = (note - neg_root + 12) % 12
+  end
+
+  return get_voiced_notes_for_preview(neg_root, neg_ivs)
+end
+
+-- ============================================================
 -- SECTION 8 — HARMONIC LOGIC
 -- ============================================================
 function get_negative_note(note, root)
@@ -1090,15 +982,8 @@ end
 
 -- ============================================================
 -- SECTION 8c — SUBSTITUTION LOGIC
---
--- Four substitution families computed on demand from a source
--- chord defined by (root pitch class, quality type, chords[] index).
--- Each function returns a list of { root, ivs, label } tables
--- ready for direct insertion via insert_chord_custom().
 -- ============================================================
 
--- Returns the chord note names as a compact string, e.g. "C-E-G".
--- Displayed in square brackets next to each substitution MenuItem.
 local function chord_notes_str(root, intervals)
   local t = {}
   for _, iv in ipairs(intervals) do
@@ -1107,23 +992,13 @@ local function chord_notes_str(root, intervals)
   return table.concat(t, "-")
 end
 
--- 1. TRITONE SUBSTITUTION
---    Replaces the source chord with the dominant 7th a tritone away (bII7).
---    Classically applied to dominant chords; offered for all qualities.
 local function get_tritone_sub(root)
   local tri_root = (root + 6) % 12
-  local ivs      = chords[9][2]   -- dom7: {0,4,7,10}
+  local ivs      = chords[9][2]
   return { { root = tri_root, ivs = ivs,
     label = note_names[tri_root + 1] .. "7  (bII7)" } }
 end
 
--- 2. RELATIVE SUBSTITUTION
---    Maj     → relative minor  (root +9 semitones, minor triad).
---    Min/Dim → relative major  (root +3 semitones, major triad).
---    Aug     → symmetric enharmonics at +4 and +8 semitones.
---              An augmented triad divides the octave into three equal major
---              thirds, so it has three enharmonically equivalent roots.
---              The two alternates are offered as relative substitutes.
 local function get_relative_sub(root, deg_type)
   local results = {}
   if deg_type == "maj" then
@@ -1135,8 +1010,6 @@ local function get_relative_sub(root, deg_type)
     results[#results+1] = { root = r, ivs = chords[1][2],
       label = note_names[r+1] .. "  (relative major)" }
   elseif deg_type == "aug" then
-    -- The three enharmonic roots of an augmented triad are separated by
-    -- major thirds (+4 semitones).  We offer the two alternatives.
     local r1 = (root + 4) % 12
     local r2 = (root + 8) % 12
     results[#results+1] = { root = r1, ivs = chords[4][2],
@@ -1147,24 +1020,12 @@ local function get_relative_sub(root, deg_type)
   return results
 end
 
--- 3. DIATONIC SUBSTITUTION
---    Replaces a degree with another degree of the same harmonic function
---    within the currently active mode.
---
---    Functional groups (standard tonal theory, 1-based degree index):
---      Tonic      : 1, 3, 6
---      Subdominant: 2, 4
---      Dominant   : 5, 7
---
---    Scans all 7 degrees of the active mode, returns those sharing the
---    same function group as the source degree (excluding the source itself).
 local function get_diatonic_subs(source_root)
   local mm      = is_minor_mode and minor_modes[minor_mode_idx]
                                  or  major_modes[major_mode_idx]
   local tonic   = circle_fifths[selected_root_idx]
   local results = {}
 
-  -- Locate source degree within the active mode.
   local src_deg = nil
   for d = 1, 7 do
     if (tonic + mm.ivs[d]) % 12 == source_root then
@@ -1173,7 +1034,6 @@ local function get_diatonic_subs(source_root)
   end
   if not src_deg then return results end
 
-  -- Functional group map: degree index → group id (Tonic=1, Sub-dom=2, Dom=3).
   local func_map = { 1, 2, 1, 2, 3, 1, 3 }
   local src_func = func_map[src_deg]
 
@@ -1189,20 +1049,12 @@ local function get_diatonic_subs(source_root)
   return results
 end
 
--- 4. MODAL BORROWING
---    For each mode in both minor_modes and major_modes (except the currently
---    active one), locates the same scale-degree position as the source chord
---    and returns the chord built on that position in the borrowed mode.
---
---    This surfaces cross-modal colours such as the bVII from Natural Minor
---    while in Major, or the raised V from Harmonic Minor while in Natural Minor.
 local function get_modal_borrowing_subs(source_root)
   local tonic     = circle_fifths[selected_root_idx]
   local results   = {}
   local mm_active = is_minor_mode and minor_modes[minor_mode_idx]
                                    or  major_modes[major_mode_idx]
 
-  -- Find source degree index in the active mode.
   local src_deg = nil
   for d = 1, 7 do
     if (tonic + mm_active.ivs[d]) % 12 == source_root then
@@ -1211,7 +1063,6 @@ local function get_modal_borrowing_subs(source_root)
   end
   if not src_deg then return results end
 
-  -- Scan a mode list, skipping the currently active mode.
   local function scan(mode_list, active_idx, family)
     for mi, mode in ipairs(mode_list) do
       local is_active = (family == "minor" and is_minor_mode     and mi == active_idx)
@@ -1234,25 +1085,44 @@ end
 -- ============================================================
 -- SECTION 8d — SUBSTITUTION CONTENT RENDERER
 --
--- Draws the four substitution sections inside an already-open
--- popup context.  Must be called between BeginPopupContextItem
--- and EndPopup — never standalone.
+-- Draws the four substitution families inside an already-open
+-- popup context.  Each MenuItem triggers chord insertion on click
+-- and, when Listen Mode is active, previews the chord on hover.
+-- listen_hovered_sub tracks the currently previewed substitution
+-- as a "family:index" key to avoid re-triggering on every frame.
 -- ============================================================
 local function render_substitution_content(chord_root, deg_type, cidx, deg_name)
-  -- Header
   local src_name = note_names[chord_root + 1] .. chords[cidx][1]
   reaper.ImGui_TextDisabled(ctx,
     "Substitutions for  " .. deg_name .. "  —  " .. src_name)
   reaper.ImGui_Separator(ctx)
 
-  -- ---- 1. Tritone Substitution ----
-  reaper.ImGui_TextDisabled(ctx, "Tritone Sub")
-  for _, s in ipairs(get_tritone_sub(chord_root)) do
+  -- Helper: draws one substitution MenuItem, handles click and Listen hover.
+  -- key : unique string identifying this item for listen_hovered_sub tracking.
+  local function sub_item(s, key)
     if reaper.ImGui_MenuItem(ctx,
         s.label .. "   [" .. chord_notes_str(s.root, s.ivs) .. "]") then
       insert_chord_custom(s.root, s.ivs, false)
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
+    -- Listen Mode: preview on hover, re-trigger only when item changes.
+    if listen_mode and reaper.ImGui_IsItemHovered(ctx) then
+      if listen_hovered_sub ~= key then
+        listen_hovered_sub   = key
+        -- Entering a substitution clears the degree tracker so that
+        -- going back to a degree button re-triggers it correctly.
+        listen_hovered_deg   = nil
+        listen_hovered_shift = nil
+        local voiced = get_voiced_notes_for_preview(s.root, s.ivs)
+        listen_note_on(voiced)
+      end
+    end
+  end
+
+  -- ---- 1. Tritone Substitution ----
+  reaper.ImGui_TextDisabled(ctx, "Tritone Sub")
+  for si, s in ipairs(get_tritone_sub(chord_root)) do
+    sub_item(s, "tri:" .. si)
   end
 
   reaper.ImGui_Separator(ctx)
@@ -1263,12 +1133,8 @@ local function render_substitution_content(chord_root, deg_type, cidx, deg_name)
   if #rel == 0 then
     reaper.ImGui_TextDisabled(ctx, "  (not applicable for this quality)")
   else
-    for _, s in ipairs(rel) do
-      if reaper.ImGui_MenuItem(ctx,
-          s.label .. "   [" .. chord_notes_str(s.root, s.ivs) .. "]") then
-        insert_chord_custom(s.root, s.ivs, false)
-        reaper.ImGui_CloseCurrentPopup(ctx)
-      end
+    for si, s in ipairs(rel) do
+      sub_item(s, "rel:" .. si)
     end
   end
 
@@ -1280,12 +1146,8 @@ local function render_substitution_content(chord_root, deg_type, cidx, deg_name)
   if #dia == 0 then
     reaper.ImGui_TextDisabled(ctx, "  (no other degree shares this function)")
   else
-    for _, s in ipairs(dia) do
-      if reaper.ImGui_MenuItem(ctx,
-          s.label .. "   [" .. chord_notes_str(s.root, s.ivs) .. "]") then
-        insert_chord_custom(s.root, s.ivs, false)
-        reaper.ImGui_CloseCurrentPopup(ctx)
-      end
+    for si, s in ipairs(dia) do
+      sub_item(s, "dia:" .. si)
     end
   end
 
@@ -1297,12 +1159,8 @@ local function render_substitution_content(chord_root, deg_type, cidx, deg_name)
   if #bor == 0 then
     reaper.ImGui_TextDisabled(ctx, "  (none available)")
   else
-    for _, s in ipairs(bor) do
-      if reaper.ImGui_MenuItem(ctx,
-          s.label .. "   [" .. chord_notes_str(s.root, s.ivs) .. "]") then
-        insert_chord_custom(s.root, s.ivs, false)
-        reaper.ImGui_CloseCurrentPopup(ctx)
-      end
+    for si, s in ipairs(bor) do
+      sub_item(s, "bor:" .. si)
     end
   end
 end
@@ -1484,6 +1342,11 @@ function loop()
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ScrollbarGrab(),     0x1E3F6FFF)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(),           0x0D1B2AEF)
 
+  -- ---- Listen Mode: tick the timer every frame ----
+  -- Must run before Begin() so that Note Off fires even when the
+  -- window is not hovered.
+  if listen_mode then listen_tick() end
+
   local visible, open = reaper.ImGui_Begin(ctx, 'SK Harmonic Compass', true, wf)
 
   if visible then
@@ -1497,6 +1360,49 @@ function loop()
     reaper.ImGui_SameLine(ctx)
     if reaper.ImGui_RadioButton(ctx, "Minor", is_minor_mode) then
       is_minor_mode = true
+    end
+
+    -- ---- Listen Mode toggle button ----
+    -- Rendered on the same line as Major/Minor to save vertical space.
+    -- Button is green when active, standard colour when inactive.
+    reaper.ImGui_SameLine(ctx)
+    reaper.ImGui_Spacing(ctx)
+    reaper.ImGui_SameLine(ctx)
+
+    if listen_mode then
+      -- Active state: bright green tint.
+      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        0x2A8040FF)
+      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x3AAA55FF)
+      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(),  0x50CC70FF)
+      if reaper.ImGui_Button(ctx, "  Listen ON  ##listen", 0, 0) then
+        -- Toggle OFF: silence any ringing notes and restore track state.
+        listen_note_off()
+        listen_hovered_deg = nil
+        listen_restore_track()
+        listen_mode = false
+      end
+      reaper.ImGui_PopStyleColor(ctx, 3)
+    else
+      if reaper.ImGui_Button(ctx, " Listen OFF ##listen", 0, 0) then
+        -- Toggle ON: arm the selected track and enable monitoring.
+        local track = reaper.GetSelectedTrack(0, 0)
+        if not track then
+          reaper.ShowMessageBox(
+            "Please select a track before enabling Listen mode.", "Error", 0)
+        else
+          listen_arm_track(track)
+          listen_hovered_deg = nil
+          listen_mode        = true
+        end
+      end
+    end
+
+    if reaper.ImGui_IsItemHovered(ctx) then
+      reaper.ImGui_BeginTooltip(ctx)
+        reaper.ImGui_Text(ctx, "Listen Mode — hover a degree button to preview the chord")
+        reaper.ImGui_Text(ctx, "Arms the selected track and enables input monitoring.")
+        reaper.ImGui_Text(ctx, "Toggle off to restore the original track state.")
+      reaper.ImGui_EndTooltip(ctx)
     end
 
     reaper.ImGui_SetNextItemWidth(ctx, 175)
@@ -1634,8 +1540,9 @@ function loop()
     local root_tonality = circle_fifths[selected_root_idx]
 
     -- ---- Degree buttons ----
-    -- Left-click  → insert chord immediately.
-    -- Right-click → open substitution context menu.
+    -- Left-click        → insert chord.
+    -- Right-click       → substitution context menu.
+    -- Hover (Listen ON) → preview chord via StuffMIDIMessage.
     for i = 1, 7 do
       local chord_root = (root_tonality + deg_ivs[i]) % 12
       local cidx       = get_chord_idx(deg_types[i], color_idx)
@@ -1651,16 +1558,35 @@ function loop()
         insert_chord_custom(chord_root, chords[cidx][2], is_shift)
       end
 
-      -- Right click → popup with full substitution content rendered inline.
-      -- Content must live inside this same BeginPopupContextItem / EndPopup block.
+      -- Right click → substitution popup.
       if reaper.ImGui_BeginPopupContextItem(ctx, popup_id) then
         render_substitution_content(chord_root, deg_types[i], cidx, deg_names[i])
         reaper.ImGui_EndPopup(ctx)
       end
 
+      -- ---- Listen Mode: hover detection ----
+      -- Re-triggers when: (a) the hovered degree changes, OR
+      --                   (b) the Shift key state toggles (normal ↔ negative harmony).
+      -- Entering a degree button clears listen_hovered_sub so that returning
+      -- from the substitution popup re-triggers the degree preview correctly.
+      if listen_mode and reaper.ImGui_IsItemHovered(ctx) then
+        if listen_hovered_deg ~= i or listen_hovered_shift ~= is_shift then
+          listen_hovered_deg   = i
+          listen_hovered_shift = is_shift
+          listen_hovered_sub   = nil   -- Clear sub tracker on degree entry.
+          local voiced
+          if is_shift then
+            voiced = get_voiced_notes_for_preview_neg(chord_root, chords[cidx][2])
+          else
+            voiced = get_voiced_notes_for_preview(chord_root, chords[cidx][2])
+          end
+          listen_note_on(voiced)
+        end
+      end
+
       reaper.ImGui_PopID(ctx)
 
-      -- Hover tooltip (normal + negative harmony preview).
+      -- Hover tooltip (always shown, Listen mode or not).
       if reaper.ImGui_IsItemHovered(ctx) then
         local full_name, note_list = get_chord_display(
           chord_root, chord_name, chords[cidx][2], false)
@@ -1686,7 +1612,13 @@ function loop()
 
   reaper.ImGui_PopStyleColor(ctx, N_COLORS)
 
-  if open then reaper.defer(loop) end
+  if open then
+    reaper.defer(loop)
+  else
+    -- Window closed: ensure notes are silenced and track state restored.
+    listen_note_off()
+    listen_restore_track()
+  end
 end
 
 reaper.defer(loop)
