@@ -803,7 +803,9 @@ end
 
 -- =============================================================================
 --  VU-METER
---  Stereo L/R post-fader display with 5 color zones.
+--  Stereo L/R display with 5 color zones.
+--  Takes into account the send volume, pan and mute.
+--  If the send is muted, the VU shows silence.
 --  A red indicator at the top signals a recent clip (2 seconds).
 -- =============================================================================
 
@@ -818,13 +820,32 @@ local VU_DB_MIN   = -60
 local VU_DB_RANGE =  66
 local CLIP_HOLD_TIME = 2.0
 
-local function draw_vu_meter(ctx, track, h, vol_scale, src_guid)
+-- vol   : send volume (0..2)
+-- pan   : send pan (-1..1), applied to L and R channels
+-- muted : if true, the VU shows silence (send is muted)
+local function draw_vu_meter(ctx, track, h, vol, pan, muted, src_guid)
   if not valid_track(track) then return end
-  vol_scale = vol_scale or 1.0
-  src_guid  = src_guid  or ""
+  vol      = vol      or 1.0
+  pan      = pan      or 0.0
+  muted    = muted    or false
+  src_guid = src_guid or ""
 
-  local peak_l = reaper.Track_GetPeakInfo(track, 0) * vol_scale
-  local peak_r = reaper.Track_GetPeakInfo(track, 1) * vol_scale
+  -- If the send is muted, nothing reaches the headphone mix
+  if muted then
+    local total_w = CFG.VU_W * 2 + CFG.VU_GAP
+    local cx, cy  = reaper.ImGui_GetCursorScreenPos(ctx)
+    local dl      = reaper.ImGui_GetWindowDrawList(ctx)
+    reaper.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx+total_w, cy+h, rgba(CFG.COL.VU_BG))
+    reaper.ImGui_Dummy(ctx, total_w, h)
+    return
+  end
+
+  -- Linear pan law: pan=-1 full left, pan=0 center, pan=1 full right
+  local gain_l = vol * (1.0 - math.max(pan, 0))
+  local gain_r = vol * (1.0 + math.min(pan, 0))
+
+  local peak_l = reaper.Track_GetPeakInfo(track, 0) * gain_l
+  local peak_r = reaper.Track_GetPeakInfo(track, 1) * gain_r
 
   local function to_db(p)
     if p <= 0 then return -math.huge end
@@ -1322,7 +1343,7 @@ local function draw_fader_strip(ctx, cue_guid, src, routing, fader_h, on_remove)
     if ch_v then routing:set_vol(cue_guid, src, clamp(nv, 0, 2)) end
 
     reaper.ImGui_SameLine(ctx, 0, 2)
-    draw_vu_meter(ctx, src.track, fader_h, vol, src.guid)
+    draw_vu_meter(ctx, src.track, fader_h, vol, pan, muted, src.guid)
 
     -- Pan
     reaper.ImGui_Spacing(ctx)

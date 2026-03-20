@@ -804,7 +804,9 @@ end
 
 -- =============================================================================
 --  VU-MÈTRE
---  Affichage stéréo L/R post-fader avec 5 zones de couleur.
+--  Affichage stéréo L/R avec 5 zones de couleur.
+--  Prend en compte le volume, le panoramique et le mute du send.
+--  Si le send est coupé, le VU affiche silence.
 --  Un indicateur rouge en haut signale un écrêtage récent (2 secondes).
 -- =============================================================================
 
@@ -819,13 +821,33 @@ local VU_DB_MIN   = -60
 local VU_DB_RANGE =  66
 local CLIP_HOLD_TIME = 2.0
 
-local function draw_vu_meter(ctx, track, h, vol_scale, src_guid)
+-- vol  : volume du send (0..2)
+-- pan  : panoramique du send (-1..1), appliqué sur L et R
+-- muted : si true, le VU affiche silence (le send est coupé)
+local function draw_vu_meter(ctx, track, h, vol, pan, muted, src_guid)
   if not valid_track(track) then return end
-  vol_scale = vol_scale or 1.0
-  src_guid  = src_guid  or ""
+  vol     = vol     or 1.0
+  pan     = pan     or 0.0
+  muted   = muted   or false
+  src_guid = src_guid or ""
 
-  local peak_l = reaper.Track_GetPeakInfo(track, 0) * vol_scale
-  local peak_r = reaper.Track_GetPeakInfo(track, 1) * vol_scale
+  -- Si le send est coupé, le casque ne reçoit rien
+  if muted then
+    local total_w = CFG.VU_W * 2 + CFG.VU_GAP
+    local cx, cy  = reaper.ImGui_GetCursorScreenPos(ctx)
+    local dl      = reaper.ImGui_GetWindowDrawList(ctx)
+    reaper.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx+total_w, cy+h, rgba(CFG.COL.VU_BG))
+    reaper.ImGui_Dummy(ctx, total_w, h)
+    return
+  end
+
+  -- Loi de pan linéaire (constant power approx.)
+  -- pan = -1 : tout à gauche, pan = 0 : centre, pan = 1 : tout à droite
+  local gain_l = vol * (1.0 - math.max(pan, 0))
+  local gain_r = vol * (1.0 + math.min(pan, 0))
+
+  local peak_l = reaper.Track_GetPeakInfo(track, 0) * gain_l
+  local peak_r = reaper.Track_GetPeakInfo(track, 1) * gain_r
 
   local function to_db(p)
     if p <= 0 then return -math.huge end
@@ -1323,7 +1345,7 @@ local function draw_fader_strip(ctx, cue_guid, src, routing, fader_h, on_remove)
     if ch_v then routing:set_vol(cue_guid, src, clamp(nv, 0, 2)) end
 
     reaper.ImGui_SameLine(ctx, 0, 2)
-    draw_vu_meter(ctx, src.track, fader_h, vol, src.guid)
+    draw_vu_meter(ctx, src.track, fader_h, vol, pan, muted, src.guid)
 
     -- Panoramique
     reaper.ImGui_Spacing(ctx)
