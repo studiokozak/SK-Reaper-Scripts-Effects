@@ -29,7 +29,7 @@
       </version>
     </reapack>
     <reapack name="SK Cue Bus Manager_EN.lua" type="script" desc="SK Cue Bus Manager_EN.lua">
-      <version name="2.1" author="Studio Kozak" time="2026-03-20">
+      <version name="1.0" author="Studio Kozak" time="2026-03-20">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Cue%20Bus%20Manager_EN.lua</source>
       </version>
     </reapack>
