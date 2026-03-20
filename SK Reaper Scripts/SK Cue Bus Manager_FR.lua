@@ -630,7 +630,7 @@ function CueManager:copy_mix(src_guid, dst_guid)
   reaper.Undo_EndBlock("CBM: Copy mix", -1)
 end
 
--- Remet tous les faders à 0 dB, pan au centre, unmute
+-- Remet tous les faders à 0 dB, pan au centre, unmute tous
 function CueManager:reset_cue(cue_guid)
   local cue = self.model.cue_buses[cue_guid]
   if not cue then return end
@@ -922,19 +922,19 @@ local function draw_topbar(ctx, cue_mgr, model)
     reaper.ImGui_SameLine(ctx, 0, 4)
     if not has_cue then reaper.ImGui_EndDisabled(ctx) end
 
-    if colored_button(ctx, "Rescan", CFG.COL.STRIP_BG, CFG.COL.STRIP_SEL, CFG.COL.ACCENT2) then
+    if colored_button(ctx, "Rescanner", CFG.COL.STRIP_BG, CFG.COL.STRIP_SEL, CFG.COL.ACCENT2) then
       model:scan()
       cue_mgr:repair_cue_folder_structure()
       set_status("Rescan effectué.")
     end
     reaper.ImGui_SameLine(ctx, 0, 4)
-    if colored_button(ctx, "Repair", CFG.COL.STRIP_BG, CFG.COL.STRIP_SEL, CFG.COL.ACCENT2) then
+    if colored_button(ctx, "Réparer", CFG.COL.STRIP_BG, CFG.COL.STRIP_SEL, CFG.COL.ACCENT2) then
       cue_mgr:repair_project_structure()
       set_status("Structure réparée.")
     end
     reaper.ImGui_SameLine(ctx, 0, 14)
 
-    -- Mute / Unmute de tous les casques simultanément
+    -- Couper / Rouvrir tous les casques simultanément
     local any_muted = false
     for _, cue in pairs(model.cue_buses) do
       if valid_track(cue.track) and get_cue_master(cue.guid).muted then
@@ -943,7 +943,7 @@ local function draw_topbar(ctx, cue_mgr, model)
     end
     local ma_col = any_muted and CFG.COL.MUTE_ON  or CFG.COL.MUTE_OFF
     local ma_hov = any_muted and 0xD05050FF        or 0x505068FF
-    local ma_lbl = any_muted and "UNMUTE ALL"      or "MUTE ALL"
+    local ma_lbl = any_muted and "TOUT ROUVRIR"      or "TOUT COUPER"
     if colored_button(ctx, ma_lbl, ma_col, ma_hov, CFG.COL.MUTE_ON) then
       local new_state = not any_muted
       for _, cue in pairs(model.cue_buses) do
@@ -1192,11 +1192,11 @@ local function draw_cue_header(ctx, cue, cue_mgr, snap, model)
     end
     reaper.ImGui_SameLine(ctx, 0, 10)
 
-    if colored_button(ctx, "Copy from…", CFG.COL.STRIP_BG, CFG.COL.STRIP_SEL, CFG.COL.ACCENT) then
+    if colored_button(ctx, "Copier depuis…", CFG.COL.STRIP_BG, CFG.COL.STRIP_SEL, CFG.COL.ACCENT) then
       UI.copy_from_dlg = true
     end
     reaper.ImGui_SameLine(ctx, 0, 4)
-    if colored_button(ctx, "Reset", CFG.COL.REM_BTN, CFG.COL.REM_HOV, CFG.COL.DANGER) then
+    if colored_button(ctx, "Réinitialiser", CFG.COL.REM_BTN, CFG.COL.REM_HOV, CFG.COL.DANGER) then
       cue_mgr:reset_cue(cue.guid)
       set_status("Mix réinitialisé.")
     end
@@ -1316,7 +1316,7 @@ local function draw_fader_strip(ctx, cue_guid, src, routing, fader_h, on_remove)
     local ch_v, nv = reaper.ImGui_VSliderDouble(ctx, "##vf"..sid, CFG.FADER_W, fader_h, vol, 0.0, 2.0, "")
     reaper.ImGui_PopStyleColor(ctx, 3)
     if reaper.ImGui_BeginPopupContextItem(ctx, "vfrst"..sid) then
-      if reaper.ImGui_MenuItem(ctx, "Reset à 0 dB")  then nv = 1.0; ch_v = true end
+      if reaper.ImGui_MenuItem(ctx, "Remettre à 0 dB")  then nv = 1.0; ch_v = true end
       if reaper.ImGui_MenuItem(ctx, "Couper le son") then nv = 0.0; ch_v = true end
       reaper.ImGui_EndPopup(ctx)
     end
@@ -1435,7 +1435,7 @@ local function draw_main_zone(ctx, cue, cue_mgr, routing, snap, model)
     else
       reaper.ImGui_Spacing(ctx)
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
-      reaper.ImGui_Text(ctx, "  MIX — "..#in_cue.." piste(s)   (clic droit sur fader/panoramique = reset)")
+      reaper.ImGui_Text(ctx, "  MIX — "..#in_cue.." piste(s)   (clic droit sur fader/panoramique = réinitialiser)")
       reaper.ImGui_PopStyleColor(ctx, 1)
       reaper.ImGui_Separator(ctx)
       reaper.ImGui_Spacing(ctx)
@@ -1444,7 +1444,7 @@ local function draw_main_zone(ctx, cue, cue_mgr, routing, snap, model)
       local master = get_cue_master(cue.guid)
       local mc = master.muted and CFG.COL.MUTE_ON or CFG.COL.MUTE_OFF
       local mh = master.muted and 0xD05050FF or 0x505068FF
-      if colored_button(ctx, master.muted and "CUE MUTE" or "cue mute",
+      if colored_button(ctx, master.muted and "CUE COUPÉ" or "cue coupé",
           mc, mh, CFG.COL.MUTE_ON, 70, CFG.MASTER_H) then
         master.muted = not master.muted
         apply_cue_master(cue.guid, model)
@@ -1469,7 +1469,7 @@ local function draw_main_zone(ctx, cue, cue_mgr, routing, snap, model)
         master.vol, 0.0, 2.0, vol_to_db(master.vol).." dB")
       reaper.ImGui_PopStyleColor(ctx, 3)
       if reaper.ImGui_BeginPopupContextItem(ctx, "masterrst"..cue.guid) then
-        if reaper.ImGui_MenuItem(ctx, "Reset master à 0 dB") then nvm = 1.0; ch_m = true end
+        if reaper.ImGui_MenuItem(ctx, "Remettre le master à 0 dB") then nvm = 1.0; ch_m = true end
         if reaper.ImGui_MenuItem(ctx, "Couper le master")    then nvm = 0.0; ch_m = true end
         reaper.ImGui_EndPopup(ctx)
       end
@@ -1479,7 +1479,7 @@ local function draw_main_zone(ctx, cue, cue_mgr, routing, snap, model)
       end
       reaper.ImGui_SameLine(ctx, 0, 8)
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
-      reaper.ImGui_Text(ctx, "(clic droit = reset)")
+      reaper.ImGui_Text(ctx, "(clic droit = réinitialiser)")
       reaper.ImGui_PopStyleColor(ctx, 1)
       reaper.ImGui_Spacing(ctx)
       reaper.ImGui_Separator(ctx)
@@ -1547,7 +1547,7 @@ local function draw_welcome(ctx)
       "      Clic gauche : sauvegarder si vide, rappeler si existant",
       "      Clic droit  : toujours sauvegarder",
       "",
-      "MUTE ALL",
+      "TOUT COUPER",
       "      Coupe ou rouvre tous les casques simultanément.",
       "",
       "REPAIR",
