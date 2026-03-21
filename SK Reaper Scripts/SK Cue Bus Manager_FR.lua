@@ -65,7 +65,7 @@ end
 
 local CFG = {
   SCRIPT_NAME = "SK Cue Bus Manager",
-  VERSION     = "1.0",
+  VERSION     = "1.1",
   WINDOW_W    = 1200,
   WINDOW_H    = 640,
   SIDEBAR_W   = 200,
