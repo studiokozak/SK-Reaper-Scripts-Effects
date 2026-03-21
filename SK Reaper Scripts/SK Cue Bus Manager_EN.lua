@@ -1459,8 +1459,8 @@ local function draw_main_zone(ctx, cue, cue_mgr, routing, snap, model)
       reaper.ImGui_Spacing(ctx)
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
       reaper.ImGui_TextWrapped(ctx,
-        "None piste dans ce casque.\n\n"..
-        "Ajoutez des pistes depuis la zone\n"..
+        "No track in this headphone.\n\n"..
+        "Add tracks from the area\n"..
         "\"Available tracks\" on the left.")
       reaper.ImGui_PopStyleColor(ctx, 1)
     else
