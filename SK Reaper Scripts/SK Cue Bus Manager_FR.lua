@@ -1,5 +1,5 @@
 -- =============================================================================
---  SK Cue Bus Manager  v1.0
+--  SK Cue Bus Manager  v1.1
 --  Studio Kozak — https://github.com/StudioKozak
 -- =============================================================================
 --
@@ -1212,6 +1212,14 @@ local function draw_cue_header(ctx, cue, cue_mgr, snap, model)
     if reaper.ImGui_IsItemHovered(ctx) then
       reaper.ImGui_SetTooltip(ctx, "Sortie hardware de ce casque")
     end
+    -- Ouvrir la fenêtre de routing native REAPER pour ce cue bus
+    if colored_button(ctx, "I/O", CFG.COL.STRIP_BG, CFG.COL.STRIP_SEL, CFG.COL.ACCENT2) then
+      reaper.SetOnlyTrackSelected(cue.track)
+      reaper.Main_OnCommand(40293, 0) -- Track: View routing and I/O
+    end
+    if reaper.ImGui_IsItemHovered(ctx) then
+      reaper.ImGui_SetTooltip(ctx, "Ouvrir la fenêtre Routing / I/O de ce cue bus")
+    end
     reaper.ImGui_SameLine(ctx, 0, 10)
 
     if colored_button(ctx, "Copier depuis…", CFG.COL.STRIP_BG, CFG.COL.STRIP_SEL, CFG.COL.ACCENT) then
@@ -1819,9 +1827,26 @@ model:scan()
 cue_mgr:repair_cue_folder_structure()
 
 local open = true
+-- Détection automatique des changements de projet
+-- REAPER incrémente ce compteur à chaque modification (piste ajoutée,
+-- supprimée, renommée...). On compare à chaque frame pour rescanner.
+local last_project_state = reaper.GetProjectStateChangeCount(0)
 
 local function loop()
   if not open then return end
+
+  -- Rescan automatique si le projet a changé
+  local current_state = reaper.GetProjectStateChangeCount(0)
+  if current_state ~= last_project_state then
+    last_project_state = current_state
+    model:scan()
+    routing:invalidate_cache()
+    cue_mgr:repair_cue_folder_structure()
+    -- Vérifier que le cue sélectionné existe toujours
+    if UI.selected_cue and not model.cue_buses[UI.selected_cue] then
+      UI.selected_cue = nil
+    end
+  end
 
   local nc, nv = push_style(ctx)
   reaper.ImGui_SetNextWindowSize(ctx, CFG.WINDOW_W, CFG.WINDOW_H, reaper.ImGui_Cond_Always())

@@ -1,5 +1,5 @@
 -- =============================================================================
---  SK Cue Bus Manager  v1.0
+--  SK Cue Bus Manager  v1.1
 --  Studio Kozak — https://github.com/StudioKozak
 -- =============================================================================
 --
@@ -1210,6 +1210,14 @@ local function draw_cue_header(ctx, cue, cue_mgr, snap, model)
     if reaper.ImGui_IsItemHovered(ctx) then
       reaper.ImGui_SetTooltip(ctx, "Hardware output for this headphone mix")
     end
+    -- Open native REAPER routing window for this cue bus
+    if colored_button(ctx, "I/O", CFG.COL.STRIP_BG, CFG.COL.STRIP_SEL, CFG.COL.ACCENT2) then
+      reaper.SetOnlyTrackSelected(cue.track)
+      reaper.Main_OnCommand(40293, 0) -- Track: View routing and I/O
+    end
+    if reaper.ImGui_IsItemHovered(ctx) then
+      reaper.ImGui_SetTooltip(ctx, "Open routing / I/O window for this cue bus")
+    end
     reaper.ImGui_SameLine(ctx, 0, 10)
 
     if colored_button(ctx, "Copy from…", CFG.COL.STRIP_BG, CFG.COL.STRIP_SEL, CFG.COL.ACCENT) then
@@ -1234,7 +1242,7 @@ local function draw_cue_header(ctx, cue, cue_mgr, snap, model)
       snap:save(cue.guid, "A"); set_status("Snapshot A saved.")
     end
     if reaper.ImGui_IsItemHovered(ctx) then
-      reaper.ImGui_SetTooltip(ctx, "Clic gauche : sauvegarder ou rappeler\nClic droit : toujours sauvegarder")
+      reaper.ImGui_SetTooltip(ctx, "Left-click: save or recall\nRight-click: always save")
     end
     reaper.ImGui_SameLine(ctx, 0, 4)
 
@@ -1248,6 +1256,9 @@ local function draw_cue_header(ctx, cue, cue_mgr, snap, model)
     end
     if reaper.ImGui_IsItemClicked(ctx, 1) then
       snap:save(cue.guid, "B"); set_status("Snapshot B saved.")
+    end
+    if reaper.ImGui_IsItemHovered(ctx) then
+      reaper.ImGui_SetTooltip(ctx, "Left-click: save or recall\nRight-click: always save")
     end
     reaper.ImGui_SameLine(ctx, 0, 10)
 
@@ -1416,7 +1427,7 @@ local function draw_main_zone(ctx, cue, cue_mgr, routing, snap, model)
     local available = model:sources_not_in_cue(cue.guid, routing)
     if #available == 0 then
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
-      reaper.ImGui_Text(ctx, "  (toutes les pistes\n   sont dans ce casque)")
+      reaper.ImGui_Text(ctx, "  (all tracks\n   are in this headphone mix)")
       reaper.ImGui_PopStyleColor(ctx, 1)
     end
 
@@ -1817,9 +1828,26 @@ model:scan()
 cue_mgr:repair_cue_folder_structure()
 
 local open = true
+-- Automatic project change detection
+-- REAPER increments this counter on every modification (track added,
+-- deleted, renamed...). Compared each frame to trigger auto-rescan.
+local last_project_state = reaper.GetProjectStateChangeCount(0)
 
 local function loop()
   if not open then return end
+
+  -- Auto-rescan when the project changes
+  local current_state = reaper.GetProjectStateChangeCount(0)
+  if current_state ~= last_project_state then
+    last_project_state = current_state
+    model:scan()
+    routing:invalidate_cache()
+    cue_mgr:repair_cue_folder_structure()
+    -- Check that the selected cue still exists
+    if UI.selected_cue and not model.cue_buses[UI.selected_cue] then
+      UI.selected_cue = nil
+    end
+  end
 
   local nc, nv = push_style(ctx)
   reaper.ImGui_SetNextWindowSize(ctx, CFG.WINDOW_W, CFG.WINDOW_H, reaper.ImGui_Cond_Always())
