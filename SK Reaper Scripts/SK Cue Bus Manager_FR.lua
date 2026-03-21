@@ -1,5 +1,5 @@
 -- =============================================================================
---  SK Cue Bus Manager  v1.1
+--  SK Cue Bus Manager
 --  Studio Kozak — https://github.com/StudioKozak
 -- =============================================================================
 --
@@ -65,7 +65,7 @@ end
 
 local CFG = {
   SCRIPT_NAME = "SK Cue Bus Manager",
-  VERSION     = "1.1",
+  VERSION     = "1.2",
   WINDOW_W    = 1200,
   WINDOW_H    = 640,
   SIDEBAR_W   = 200,
@@ -805,8 +805,9 @@ end
 -- =============================================================================
 --  VU-MÈTRE
 --  Affichage stéréo L/R avec 5 zones de couleur.
+--  Lit le signal post-fader de la piste source.
+--  Le volume, le panoramique et le mute du send sont appliqués.
 --  Prend en compte le volume, le panoramique et le mute du send.
---  Si le send est coupé, le VU affiche silence.
 --  Un indicateur rouge en haut signale un écrêtage récent (2 secondes).
 -- =============================================================================
 
@@ -841,11 +842,16 @@ local function draw_vu_meter(ctx, track, h, vol, pan, muted, src_guid)
     return
   end
 
-  -- Loi de pan linéaire (constant power approx.)
+  -- Loi de pan linéaire
   -- pan = -1 : tout à gauche, pan = 0 : centre, pan = 1 : tout à droite
   local gain_l = vol * (1.0 - math.max(pan, 0))
   local gain_r = vol * (1.0 + math.min(pan, 0))
 
+  -- Lecture du peak de la piste source.
+  -- Note : Track_GetPeakInfo retourne le signal post-fader de la piste.
+  -- Si le fader console REAPER est baissé, le VU sera affecté.
+  -- C'est une limitation de l'API REAPER — le peak pre-fader
+  -- n'est pas accessible via ReaScript.
   local peak_l = reaper.Track_GetPeakInfo(track, 0) * gain_l
   local peak_r = reaper.Track_GetPeakInfo(track, 1) * gain_r
 
@@ -979,6 +985,21 @@ local function draw_topbar(ctx, cue_mgr, model)
     if reaper.ImGui_IsItemHovered(ctx) then
       reaper.ImGui_SetTooltip(ctx, any_muted and "Rouvrir tous les casques"
         or "Couper tous les casques simultanément")
+    end
+
+    -- Bouton Pre-fader metering (action 42076)
+    reaper.ImGui_SameLine(ctx, 0, 14)
+    local pre_fader_on = reaper.GetToggleCommandState(42076) == 1
+    local pf_col = pre_fader_on and CFG.COL.ACCENT2 or CFG.COL.MUTE_OFF
+    local pf_hov = pre_fader_on and 0x50D0A0FF   or 0x505068FF
+    if colored_button(ctx, "VU PRE FDR", pf_col, pf_hov, CFG.COL.ACCENT2) then
+      reaper.Main_OnCommand(42076, 0)
+    end
+    if reaper.ImGui_IsItemHovered(ctx) then
+      reaper.ImGui_SetTooltip(ctx,
+        pre_fader_on
+        and "VU-mètres : signal PRE-FADER (actif)\nCliquer pour passer en post-fader"
+        or  "VU-mètres : signal POST-FADER (actif)\nCliquer pour passer en pre-fader")
     end
 
     -- Message de statut (disparaît après 3 secondes)

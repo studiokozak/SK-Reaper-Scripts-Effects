@@ -1,5 +1,5 @@
 -- =============================================================================
---  SK Cue Bus Manager  v1.1
+--  SK Cue Bus Manager
 --  Studio Kozak — https://github.com/StudioKozak
 -- =============================================================================
 --
@@ -64,7 +64,7 @@ end
 
 local CFG = {
   SCRIPT_NAME = "SK Cue Bus Manager",
-  VERSION     = "1.1",
+  VERSION     = "1.2",
   WINDOW_W    = 1200,
   WINDOW_H    = 640,
   SIDEBAR_W   = 200,
@@ -804,8 +804,9 @@ end
 -- =============================================================================
 --  VU-METER
 --  Stereo L/R display with 5 color zones.
+--  Reads the post-fader signal from the source track.
+--  Send volume, pan and mute are applied on top.
 --  Takes into account the send volume, pan and mute.
---  If the send is muted, the VU shows silence.
 --  A red indicator at the top signals a recent clip (2 seconds).
 -- =============================================================================
 
@@ -844,6 +845,10 @@ local function draw_vu_meter(ctx, track, h, vol, pan, muted, src_guid)
   local gain_l = vol * (1.0 - math.max(pan, 0))
   local gain_r = vol * (1.0 + math.min(pan, 0))
 
+  -- Reads the peak from the source track.
+  -- Note: Track_GetPeakInfo returns the post-fader signal.
+  -- If the REAPER console fader is lowered, the VU will be affected.
+  -- This is an API limitation — pre-fader peak is not accessible via ReaScript.
   local peak_l = reaper.Track_GetPeakInfo(track, 0) * gain_l
   local peak_r = reaper.Track_GetPeakInfo(track, 1) * gain_r
 
@@ -977,6 +982,21 @@ local function draw_topbar(ctx, cue_mgr, model)
     if reaper.ImGui_IsItemHovered(ctx) then
       reaper.ImGui_SetTooltip(ctx, any_muted and "Unmute all headphones"
         or "Mute all headphones simultaneously")
+    end
+
+    -- Pre-fader metering toggle button (action 42076)
+    reaper.ImGui_SameLine(ctx, 0, 14)
+    local pre_fader_on = reaper.GetToggleCommandState(42076) == 1
+    local pf_col = pre_fader_on and CFG.COL.ACCENT2 or CFG.COL.MUTE_OFF
+    local pf_hov = pre_fader_on and 0x50D0A0FF   or 0x505068FF
+    if colored_button(ctx, "VU PRE FDR", pf_col, pf_hov, CFG.COL.ACCENT2) then
+      reaper.Main_OnCommand(42076, 0)
+    end
+    if reaper.ImGui_IsItemHovered(ctx) then
+      reaper.ImGui_SetTooltip(ctx,
+        pre_fader_on
+        and "VU-meters: PRE-FADER signal (active)\nClick to switch to post-fader"
+        or  "VU-meters: POST-FADER signal (active)\nClick to switch to pre-fader")
     end
 
     -- Status message (disappears after 3 seconds)
@@ -1459,9 +1479,9 @@ local function draw_main_zone(ctx, cue, cue_mgr, routing, snap, model)
       reaper.ImGui_Spacing(ctx)
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
       reaper.ImGui_TextWrapped(ctx,
-        "No track in this headphone.\n\n"..
-        "Add tracks from the area\n"..
-        "\"Available tracks\" on the left.")
+        "No tracks in this headphone mix.\n\n"..
+        "Add tracks from the\n"..
+        "\"Available tracks\" zone on the left.")
       reaper.ImGui_PopStyleColor(ctx, 1)
     else
       reaper.ImGui_Spacing(ctx)
