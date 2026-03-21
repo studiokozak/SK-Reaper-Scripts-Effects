@@ -1032,7 +1032,7 @@ local function draw_sidebar(ctx, cue_mgr, model)
     local cues = model:cue_list()
     if #cues == 0 then
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
-      reaper.ImGui_TextWrapped(ctx, "  Aucun casque.\n  [+ New Cue]")
+      reaper.ImGui_TextWrapped(ctx, "  No headphones.\n  [+ New Cue]")
       reaper.ImGui_PopStyleColor(ctx, 1)
     end
 
