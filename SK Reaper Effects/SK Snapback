@@ -1,0 +1,429 @@
+// =============================================================================
+//  SK Snapback — Studio Kozak
+//  Version 1.0
+//
+//  Snapback effect for drum elements.
+//  Generates a synthetic pre-hit sweep just before each detected hit.
+//
+//  Best used on snares
+// =============================================================================
+
+desc: SK Snapback
+
+// Amount: intensity of the sweep (0 = no effect, 1 = maximum)
+slider1:0.8<0,1,0.01>Amount
+
+// Length: duration of the sweep in milliseconds — active when Grid is off
+slider2:40<10,150,1>Length (ms)
+
+// Grid: locks the sweep length to the session tempo
+slider3:0<0,1,1{Off,On}>Grid
+
+// Note Value: rhythmic subdivision used when Grid is on
+slider4:0<0,5,1{1/32, 1/64, 1/32., 1/64., 1/32T, 1/64T}>Note Value
+
+// Tone: color of the sweep — left = dark and warm / right = bright and airy
+slider5:0.3<0,1,0.01>Tone
+
+// Focus: hit detection sensitivity — low = triggers on everything / high = selective
+slider6:0.5<0,1,0.01>Focus
+
+in_pin:Input L
+in_pin:Input R
+out_pin:Output L
+out_pin:Output R
+
+
+@init
+
+PI = 3.14159265358979;
+
+// Memory layout
+SAM_MAX = 16384;   // Max sweep sample length
+DLY_MAX = 16384;   // Max delay buffer length
+WF_SIZE  = 256;    // Waveform display resolution
+
+BASE_PLAY  = 0;                          // Ready-to-play sweep (reversed)
+BASE_GEN   = SAM_MAX;                    // Generated sweep (forward)
+BASE_WF    = SAM_MAX * 2;               // Reduced waveform for display
+BASE_DLY_L = SAM_MAX * 2 + WF_SIZE;    // Delay buffer — left channel
+BASE_DLY_R = SAM_MAX * 2 + WF_SIZE + DLY_MAX; // Delay buffer — right channel
+
+memset(0, 0, SAM_MAX * 2 + WF_SIZE + DLY_MAX * 2);
+
+// Delay buffer state
+sam_len   = 0;
+dly_write = 0;
+
+// Playback state
+play_active = 0;
+play_pos    = 0;
+
+// Detection state
+env_val        = 0;
+retrigger_lock = 0;
+
+// Display state
+dbg_env_peak  = 0;
+dbg_peak_hold = 0;
+
+// Tone filter state
+tf_y1     = 0;
+tf_x1     = 0;
+tone_mode = 0;
+tone_a0   = 1;
+tone_b1   = 0;
+
+// Change detection — triggers sample regeneration when needed
+last_length_samp = -1;
+last_tone_val    = -1;
+last_tempo       = -1;
+last_sync        = -1;
+last_subdiv      = -1;
+cur_tempo        = 120;
+
+
+// -----------------------------------------------------------------------------
+//  generate_sample()
+//  Builds the sweep sample from filtered noise with a decaying envelope,
+//  then reverses it so it rises toward the hit.
+//  Called automatically whenever Length, Tone, Grid or Note Value change.
+// -----------------------------------------------------------------------------
+
+function generate_sample()
+local(i, noise, filt_y, fc, b1, a0, env_decay, env_e, peak, v,
+      wf_i, wf_max, s, lcg, seg_start, seg_end)
+(
+  fc        = 200 + tone_gen * tone_gen * 8000;
+  b1        = exp(-2.0 * PI * fc / srate);
+  a0        = 1.0 - b1;
+  env_decay = exp(-6.0 / max(sam_len, 1) * (1.0 + tone_gen * 2.0));
+
+  // Deterministic noise generator — same result every time for a given
+  // Length / Tone combination, regardless of when the plugin is loaded
+  lcg    = 12345;
+  filt_y = 0;
+  env_e  = 1.0;
+
+  i = 0;
+  loop(sam_len,
+    lcg    = (lcg * 1664525 + 1013904223) & 0xFFFFFFFF;
+    noise  = (lcg / 2147483648.0) - 1.0;
+    filt_y = a0 * noise + b1 * filt_y;
+    mem[BASE_GEN + i] = filt_y * env_e;
+    env_e *= env_decay;
+    i += 1;
+  );
+
+  // Normalize to 0 dBFS
+  peak = 0.0001;
+  i = 0;
+  loop(sam_len,
+    v = abs(mem[BASE_GEN + i]);
+    v > peak ? peak = v;
+    i += 1;
+  );
+  i = 0;
+  loop(sam_len,
+    mem[BASE_GEN + i] /= peak;
+    i += 1;
+  );
+
+  // Reverse into BASE_PLAY — the sweep rises toward the hit
+  i = 0;
+  loop(sam_len,
+    mem[BASE_PLAY + i] = mem[BASE_GEN + sam_len - 1 - i];
+    i += 1;
+  );
+
+  // Build display waveform — reads BASE_GEN in reverse so the
+  // attack appears on the right side of the display
+  wf_i = 0;
+  loop(WF_SIZE,
+    seg_start = floor((WF_SIZE - 1 - wf_i)     * (sam_len - 1) / max(WF_SIZE - 1, 1));
+    seg_end   = min(floor((WF_SIZE - wf_i)      * (sam_len - 1) / max(WF_SIZE - 1, 1)), sam_len - 1);
+    wf_max = 0;
+    s = seg_start;
+    loop(max(seg_end - seg_start + 1, 1),
+      v = abs(mem[BASE_GEN + s]);
+      v > wf_max ? wf_max = v;
+      s += 1;
+    );
+    mem[BASE_WF + wf_i] = wf_max;
+    wf_i += 1;
+  );
+);
+
+
+@slider
+
+// Derive sweep length from tempo when Grid is on,
+// or use the Length slider directly when Grid is off
+slider3 >= 0.5 ? (
+  cur_tempo  = tempo > 20 ? tempo : 120;
+  beat_ms    = 60000.0 / cur_tempo;
+  subdiv_idx = floor(slider4);
+  subdiv_idx == 0 ? subdiv_mult = 0.125;    // 1/32
+  subdiv_idx == 1 ? subdiv_mult = 0.0625;   // 1/64
+  subdiv_idx == 2 ? subdiv_mult = 0.1875;   // 1/32 dotted
+  subdiv_idx == 3 ? subdiv_mult = 0.09375;  // 1/64 dotted
+  subdiv_idx == 4 ? subdiv_mult = 0.08333;  // 1/32 triplet
+  subdiv_idx == 5 ? subdiv_mult = 0.04167;  // 1/64 triplet
+  length_ms = beat_ms * subdiv_mult;
+) : (
+  length_ms = slider2;
+);
+
+length_samp = min(floor(length_ms * srate / 1000.0), SAM_MAX - 1);
+length_samp = min(length_samp, DLY_MAX - 1);
+
+// Regenerate sweep sample when any relevant parameter changes
+(length_samp != last_length_samp) ||
+(slider3     != last_sync)        ||
+(slider4     != last_subdiv)      ||
+(slider5     != last_tone_val)    ? (
+  sam_len          = length_samp;
+  tone_gen         = slider5;
+  last_length_samp = length_samp;
+  last_tone_val    = slider5;
+  last_sync        = slider3;
+  last_subdiv      = slider4;
+  play_active      = 0;
+  play_pos         = 0;
+  memset(BASE_DLY_L, 0, DLY_MAX);
+  memset(BASE_DLY_R, 0, DLY_MAX);
+  dly_write = 0;
+  generate_sample();
+);
+
+// Latency declaration — REAPER uses this to align all tracks including MIDI
+pdc_delay  = sam_len;
+pdc_midi   = 1;
+pdc_bot_ch = 0;
+pdc_top_ch = 2;
+
+// Detection parameters
+focus_thresh   = 0.02 + slider6 * 0.40;
+env_attack     = exp(-1.0 / (srate * 0.001));
+env_release    = exp(-1.0 / (srate * 0.040));
+retrigger_samp = max(sam_len, floor(0.08 * srate));
+
+// Gain
+rev_gain = slider1;
+
+// Tone filter coefficients
+tone_val = slider5;
+tone_val < 0.45 ? (
+  tone_mode = 1;
+  fc_t      = 400 + (tone_val / 0.45) * 7000;
+  tone_b1   = exp(-2.0 * PI * fc_t / srate);
+  tone_a0   = 1.0 - tone_b1;
+) : tone_val > 0.55 ? (
+  tone_mode = 2;
+  fc_t      = 80 + ((tone_val - 0.55) / 0.45) * 2000;
+  tone_b1   = exp(-2.0 * PI * fc_t / srate);
+  tone_a0   = (1.0 + tone_b1) * 0.5;
+) : (
+  tone_mode = 0;
+  tone_a0   = 1;
+  tone_b1   = 0;
+);
+
+
+@block
+
+// Update tempo and regenerate sweep if tempo changed while Grid is on
+cur_tempo = tempo > 20 ? tempo : 120;
+slider3 >= 0.5 ? (
+  cur_tempo != last_tempo ? (
+    last_tempo = cur_tempo;
+    sliderchange(slider2);
+  );
+);
+
+// Keep PDC in sync with current sweep length
+pdc_delay  = sam_len;
+pdc_midi   = 1;
+pdc_bot_ch = 0;
+pdc_top_ch = 2;
+
+
+@sample
+
+// Write incoming audio into the delay buffer
+mem[BASE_DLY_L + dly_write] = spl0;
+mem[BASE_DLY_R + dly_write] = spl1;
+
+// Read dry signal delayed by sam_len samples
+// so the sweep ends exactly when the hit arrives at the output
+dly_read = (dly_write - sam_len + DLY_MAX * 4) % DLY_MAX;
+dry_L    = mem[BASE_DLY_L + dly_read];
+dry_R    = mem[BASE_DLY_R + dly_read];
+dly_write = (dly_write + 1) % DLY_MAX;
+
+// Hit detection — fast attack to catch transients, slow release to avoid
+// false triggers on resonance tails
+detect_sig = (abs(spl0) + abs(spl1)) * 0.5;
+detect_sig > env_val ? (
+  env_val = env_attack * env_val + (1.0 - env_attack) * detect_sig;
+) : (
+  env_val = env_release * env_val + (1.0 - env_release) * detect_sig;
+);
+
+// Peak hold for display
+env_val > dbg_env_peak ? (
+  dbg_env_peak  = env_val;
+  dbg_peak_hold = floor(srate * 0.5);
+) : (
+  dbg_peak_hold > 0 ? (
+    dbg_peak_hold -= 1;
+  ) : (
+    dbg_env_peak *= 0.995;
+  );
+);
+
+retrigger_lock > 0 ? retrigger_lock -= 1;
+
+// Trigger the sweep on each detected hit
+(env_val > focus_thresh) && (retrigger_lock <= 0) && (play_active == 0) ? (
+  play_active    = 1;
+  play_pos       = 0;
+  retrigger_lock = retrigger_samp;
+  tf_x1          = 0;
+  tf_y1          = 0;
+);
+
+// Play the sweep sample
+play_L = 0;
+play_active ? (
+  raw = mem[BASE_PLAY + play_pos];
+
+  // Apply Tone filter
+  tone_mode == 1 ? (
+    filt = tone_a0 * raw + tone_b1 * tf_y1;
+  ) : tone_mode == 2 ? (
+    filt = tone_a0 * (raw - tf_x1) + tone_b1 * tf_y1;
+  ) : (
+    filt = raw;
+  );
+  tf_x1 = raw;
+  tf_y1 = filt;
+
+  // Short fade out at the end to prevent clicks
+  fade_samp = floor(0.005 * srate);
+  play_pos > (sam_len - fade_samp) ? (
+    env_win = (sam_len - play_pos) / max(fade_samp, 1);
+  ) : (
+    env_win = 1.0;
+  );
+
+  play_L = filt * env_win * rev_gain;
+
+  play_pos += 1;
+  play_pos >= sam_len ? (
+    play_active = 0;
+    play_pos    = 0;
+    tf_x1       = 0;
+    tf_y1       = 0;
+  );
+);
+
+// Output: delayed dry signal + sweep
+spl0 = dry_L + play_L;
+spl1 = dry_R + play_L;
+
+
+@gfx 460 160
+
+gfx_clear = 0x111111;
+W = gfx_w;
+H = gfx_h;
+
+// Background
+gfx_r=0.07; gfx_g=0.07; gfx_b=0.09; gfx_a=1;
+gfx_rect(0, 0, W, H);
+
+// Title
+gfx_setfont(1, "Arial", 12, 'b');
+gfx_r=0.75; gfx_g=0.75; gfx_b=0.75; gfx_a=1;
+gfx_x=8; gfx_y=6;
+gfx_drawstr("SK Snapback");
+
+// Top right: Grid status + note value + length in ms
+gfx_setfont(1, "Arial", 11, 'b');
+slider3 >= 0.5 ? (
+  gfx_r=0.3; gfx_g=0.85; gfx_b=0.4; gfx_a=1;
+  gfx_x=W-155; gfx_y=6;
+  gfx_drawstr("GRID  ");
+  subdiv_idx = floor(slider4);
+  subdiv_idx == 0 ? gfx_drawstr("1/32");
+  subdiv_idx == 1 ? gfx_drawstr("1/64");
+  subdiv_idx == 2 ? gfx_drawstr("1/32.");
+  subdiv_idx == 3 ? gfx_drawstr("1/64.");
+  subdiv_idx == 4 ? gfx_drawstr("1/32T");
+  subdiv_idx == 5 ? gfx_drawstr("1/64T");
+  gfx_r=0.4; gfx_g=0.4; gfx_b=0.4; gfx_a=1;
+  gfx_x=W-60; gfx_y=6;
+  gfx_drawnumber(sam_len * 1000.0 / srate, 0);
+  gfx_drawstr(" ms");
+) : (
+  gfx_r=0.35; gfx_g=0.35; gfx_b=0.35; gfx_a=1;
+  gfx_x=W-60; gfx_y=6;
+  gfx_drawnumber(slider2, 0);
+  gfx_drawstr(" ms");
+);
+
+// Sweep waveform display
+wf_x=8; wf_y=26; wf_w=W-16; wf_h=64;
+gfx_r=0.09; gfx_g=0.09; gfx_b=0.12; gfx_a=1;
+gfx_rect(wf_x, wf_y, wf_w, wf_h);
+gfx_r=0.16; gfx_g=0.16; gfx_b=0.19; gfx_a=1;
+gfx_line(wf_x, wf_y+wf_h/2, wf_x+wf_w, wf_y+wf_h/2);
+
+play_cursor = play_active ? floor(play_pos * WF_SIZE / max(sam_len,1)) : -1;
+wf_i = 0;
+loop(WF_SIZE,
+  v  = mem[BASE_WF + wf_i];
+  px = wf_x + floor(wf_i * wf_w / WF_SIZE);
+  pw = max(floor(wf_w / WF_SIZE), 1);
+  ph = floor(v * wf_h * 0.46);
+  py = wf_y + wf_h/2;
+  wf_i == play_cursor ? (
+    gfx_r=1.0; gfx_g=0.55; gfx_b=0.05;
+  ) : (
+    gfx_r=0.18; gfx_g=0.52; gfx_b=0.82;
+  );
+  gfx_a=1;
+  gfx_rect(px, py-ph, pw, ph*2);
+  wf_i += 1;
+);
+
+// Input level bar (green) + peak hold (white) + Focus threshold (red)
+bar_x=8; bar_y=100; bar_w=W-32; bar_h=14;
+gfx_r=0.11; gfx_g=0.11; gfx_b=0.14; gfx_a=1;
+gfx_rect(bar_x, bar_y, bar_w, bar_h);
+gfx_r=0.18; gfx_g=0.72; gfx_b=0.28; gfx_a=1;
+gfx_rect(bar_x, bar_y, floor(min(env_val,1)*bar_w), bar_h);
+gfx_r=1; gfx_g=1; gfx_b=1; gfx_a=0.5;
+gfx_rect(bar_x+floor(min(dbg_env_peak,1)*bar_w)-1, bar_y, 2, bar_h);
+gfx_r=1; gfx_g=0.2; gfx_b=0.15; gfx_a=1;
+gfx_rect(bar_x+floor(min(focus_thresh,1)*bar_w)-1, bar_y, 2, bar_h);
+
+// Bar labels
+gfx_setfont(1, "Arial", 12, 'b');
+gfx_r=0.60; gfx_g=0.60; gfx_b=0.60; gfx_a=1;
+gfx_x=bar_x; gfx_y=bar_y+bar_h+4;
+gfx_drawstr("Input level");
+gfx_r=0.85; gfx_g=0.25; gfx_b=0.20; gfx_a=1;
+gfx_x=bar_x + floor(bar_w * 0.5) - 20; gfx_y=bar_y+bar_h+4;
+gfx_drawstr("Focus");
+
+// Trigger LED — orange when sweep is playing
+play_active ? (gfx_r=1.0; gfx_g=0.55; gfx_b=0.05;) : (gfx_r=0.18; gfx_g=0.18; gfx_b=0.22;);
+gfx_a=1;
+gfx_circle(W-14, 107, 7, 1);
+gfx_setfont(1, "Arial", 12, 'b');
+gfx_r=0.60; gfx_g=0.60; gfx_b=0.60; gfx_a=1;
+gfx_x=W-80; gfx_y=bar_y+bar_h+4;
+gfx_drawstr("Snapback");
+
