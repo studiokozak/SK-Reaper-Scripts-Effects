@@ -64,7 +64,7 @@ end
 
 local CFG = {
   SCRIPT_NAME = "SK Cue Bus Manager",
-  VERSION     = "1.2",
+  VERSION     = "1.3",
   WINDOW_W    = 1200,
   WINDOW_H    = 640,
   SIDEBAR_W   = 200,
@@ -775,9 +775,16 @@ local UI = {
   color_pastel_amt = 0.0,
   clip_hold        = {},
   cue_master       = {},
+  strip_wide       = false,   -- false = mode normal, true = mode large
+  strip_custom_w   = 120,     -- largeur en mode large (px), modifiable
   status_msg       = "",
   status_time      = 0,
 }
+
+-- Largeur de strip courante selon le mode Normal/Large
+local function strip_w()
+  return UI.strip_wide and UI.strip_custom_w or 80
+end
 
 local function set_status(msg)
   UI.status_msg  = msg
@@ -998,6 +1005,38 @@ local function draw_topbar(ctx, cue_mgr, model)
         and "VU-meters: PRE-FADER signal (active)\nClick to switch to post-fader"
         or  "VU-meters: POST-FADER signal (active)\nClick to switch to pre-fader")
     end
+    reaper.ImGui_SameLine(ctx, 0, 4)
+    -- Strip width toggle + custom width input
+    local sw_col = UI.strip_wide and CFG.COL.ACCENT2 or CFG.COL.MUTE_OFF
+    local sw_hov = UI.strip_wide and 0x50D0A0FF   or 0x505068FF
+    if colored_button(ctx, UI.strip_wide and "WIDE" or "wide",
+        sw_col, sw_hov, CFG.COL.ACCENT2) then
+      UI.strip_wide = not UI.strip_wide
+    end
+    if reaper.ImGui_IsItemHovered(ctx) then
+      reaper.ImGui_SetTooltip(ctx,
+        UI.strip_wide
+        and "Wide strip mode — click for normal (80px)"
+        or  "Normal strip mode — click for wide")
+    end
+    if UI.strip_wide then
+      reaper.ImGui_SameLine(ctx, 0, 4)
+      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
+      reaper.ImGui_Text(ctx, "px:")
+      reaper.ImGui_PopStyleColor(ctx, 1)
+      reaper.ImGui_SameLine(ctx, 0, 2)
+      reaper.ImGui_SetNextItemWidth(ctx, 46)
+      local ch_w, nw = reaper.ImGui_InputInt(ctx, "##stripw",
+        UI.strip_custom_w, 0, 0)
+      if ch_w then
+        UI.strip_custom_w = math.max(80, math.min(300, nw))
+        reaper.SetExtState("SK_CBM_UI", "strip_custom_w",
+          tostring(UI.strip_custom_w), true)
+      end
+      if reaper.ImGui_IsItemHovered(ctx) then
+        reaper.ImGui_SetTooltip(ctx, "Strip width in wide mode (80–300 px)")
+      end
+    end
 
     -- Status message (disappears after 3 seconds)
     local elapsed = reaper.time_precise() - UI.status_time
@@ -1052,10 +1091,11 @@ local function draw_sidebar(ctx, cue_mgr, model)
         reaper.ImGui_SameLine(ctx, 0, 4)
       end
 
+      -- Fond plus marqué pour le cue actif, bordure gauche colorée
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Header(),
-        is_sel and rgba(CFG.COL.CUE_SEL) or rgba(0))
+        is_sel and rgba(0x3A5080FF) or rgba(0))
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_HeaderHovered(), rgba(CFG.COL.CUE_HOVER))
-      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_HeaderActive(),  rgba(CFG.COL.CUE_HOVER))
+      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_HeaderActive(),  rgba(0x3A5080FF))
 
       if is_ren then
         reaper.ImGui_SetNextItemWidth(ctx, CFG.SIDEBAR_W - 46)
@@ -1327,13 +1367,16 @@ local function draw_fader_strip(ctx, cue_guid, src, routing, fader_h, on_remove)
 
   local strip_h = fader_h + 130
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ChildBg(), col_bg)
-  if reaper.ImGui_BeginChild(ctx, "strip"..sid, CFG.STRIP_W, strip_h, 1,
+  if reaper.ImGui_BeginChild(ctx, "strip"..sid, strip_w(), strip_h, 1,
       reaper.ImGui_WindowFlags_NoScrollbar() |
       reaper.ImGui_WindowFlags_NoScrollWithMouse()) then
 
     -- Remove button + track name
     local name = src.name
-    if #name > 7 then name = name:sub(1,6).."~" end
+    -- Troncature dynamique selon la largeur du strip
+    -- ~7px par caractère en police par défaut, 19px réservés pour [x] + marge
+    local max_chars = math.max(4, math.floor((strip_w() - 22) / 7))
+    if #name > max_chars then name = name:sub(1, max_chars - 1).."~" end
     if on_remove then
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        rgba(CFG.COL.REM_BTN))
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), rgba(CFG.COL.REM_HOV))
@@ -1350,6 +1393,10 @@ local function draw_fader_strip(ctx, cue_guid, src, routing, fader_h, on_remove)
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), col_accent_dim)
     reaper.ImGui_Text(ctx, name)
     reaper.ImGui_PopStyleColor(ctx, 1)
+    -- Show full name on hover if truncated
+    if reaper.ImGui_IsItemHovered(ctx) and #src.name > max_chars then
+      reaper.ImGui_SetTooltip(ctx, src.name)
+    end
 
     -- Level in dB
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
@@ -1359,7 +1406,7 @@ local function draw_fader_strip(ctx, cue_guid, src, routing, fader_h, on_remove)
 
     -- Vertical fader + VU-meter side by side
     local vu_w    = CFG.VU_W * 2 + CFG.VU_GAP
-    local fader_x = math.floor((CFG.STRIP_W - CFG.FADER_W - vu_w - 2) / 2)
+    local fader_x = math.floor((strip_w() - CFG.FADER_W - vu_w - 2) / 2)
     reaper.ImGui_SetCursorPosX(ctx, fader_x)
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(),         rgba(CFG.COL.FADER_RAIL))
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_SliderGrab(),      col_fader_grab)
@@ -1383,7 +1430,7 @@ local function draw_fader_strip(ctx, cue_guid, src, routing, fader_h, on_remove)
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_SliderGrab(),      rgba(0xFFFFFFFF))
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_SliderGrabActive(),rgba(CFG.COL.ACCENT2))
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_GrabMinSize(), 10)
-    reaper.ImGui_SetNextItemWidth(ctx, CFG.STRIP_W - 6)
+    reaper.ImGui_SetNextItemWidth(ctx, strip_w() - 6)
     local ch_p, np = reaper.ImGui_SliderDouble(ctx, "##pan"..sid, pan, -1.0, 1.0, "")
     reaper.ImGui_PopStyleVar(ctx, 1)
     reaper.ImGui_PopStyleColor(ctx, 4)
@@ -1398,7 +1445,7 @@ local function draw_fader_strip(ctx, cue_guid, src, routing, fader_h, on_remove)
       string.format("%s%d", pan < 0 and "L" or "R", math.floor(math.abs(pan)*100+0.5))
     local txt_w = reaper.ImGui_CalcTextSize(ctx, pan_str)
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
-    reaper.ImGui_SetCursorPosX(ctx, math.floor((CFG.STRIP_W - txt_w) / 2))
+    reaper.ImGui_SetCursorPosX(ctx, math.floor((strip_w() - txt_w) / 2))
     reaper.ImGui_Text(ctx, pan_str)
     reaper.ImGui_PopStyleColor(ctx, 1)
 
@@ -1407,7 +1454,7 @@ local function draw_fader_strip(ctx, cue_guid, src, routing, fader_h, on_remove)
     local mc = muted and CFG.COL.MUTE_ON or CFG.COL.MUTE_OFF
     local mh = muted and 0xD05050FF or 0x505068FF
     if colored_button(ctx, muted and "MUTE" or "mute", mc, mh, CFG.COL.MUTE_ON,
-        CFG.STRIP_W - 6, 22) then
+        strip_w() - 6, 22) then
       routing:set_mute(cue_guid, src, not muted)
     end
 
@@ -1847,6 +1894,12 @@ local snap         = SnapSystem.new(model, routing)
 model:scan()
 cue_mgr:repair_cue_folder_structure()
 
+-- Restore strip width preference from previous session
+local _saved_w = tonumber(reaper.GetExtState("SK_CBM_UI", "strip_custom_w"))
+if _saved_w then
+  UI.strip_custom_w = math.max(80, math.min(300, _saved_w))
+end
+
 local open = true
 -- Automatic project change detection
 -- REAPER increments this counter on every modification (track added,
@@ -1870,7 +1923,7 @@ local function loop()
   end
 
   local nc, nv = push_style(ctx)
-  reaper.ImGui_SetNextWindowSize(ctx, CFG.WINDOW_W, CFG.WINDOW_H, reaper.ImGui_Cond_Always())
+  reaper.ImGui_SetNextWindowSize(ctx, CFG.WINDOW_W, CFG.WINDOW_H, reaper.ImGui_Cond_FirstUseEver())
   local visible, keep = reaper.ImGui_Begin(ctx,
     CFG.SCRIPT_NAME.." v"..CFG.VERSION, true,
     reaper.ImGui_WindowFlags_NoScrollbar() |
