@@ -23,7 +23,7 @@
   </category>
 
     <category name="FX/Dynamics">
-    <reapack name="SK Snapback" type="effect" desc="Synthetic pre-hit sweep generator">
+    <reapack name="SK Snapback" type="effect" desc="SK Snapback : Synthetic pre-hit sweep generator">
       <version name="1.0" author="Studio Kozak" time="2026-03-22">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Effects/SK%20Snapback</source>
       </version>
