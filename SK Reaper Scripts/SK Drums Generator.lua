@@ -2,7 +2,7 @@
   SK Drums Generator
 
   Author   : Studio Kozak
-  Version  : 1.0.1
+  Version  : 1.1
   Requires : ReaImGui extension (https://github.com/cfillion/reaimgui)
 
 
@@ -917,12 +917,19 @@ local function loop()
 
           reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), btn_col)
           local label = (layer > 0) and (tostring(layer) .. "##b") or "##c"
-          if reaper.ImGui_Button(ctx, label, 25, 25) then
-            if state.vel_edit_mode then
+            if reaper.ImGui_Button(ctx, label, 25, 25) then
+               if state.vel_edit_mode then
               grid[i][step] = (layer + 1) % 6
-            else
-              grid[i][step] = (layer == 0) and 3 or 0
+              else
+               grid[i][step] = (layer == 0) and 3 or 0
             end
+          end
+            if state.vel_edit_mode and reaper.ImGui_IsItemHovered(ctx) then
+              local wheel = reaper.ImGui_GetMouseWheel(ctx)
+              if wheel ~= 0 then
+              local delta = wheel > 0 and 1 or -1
+              grid[i][step] = math.max(0, math.min(5, layer + delta))
+              end
           end
           reaper.ImGui_PopStyleColor(ctx)
           reaper.ImGui_PopID(ctx)
