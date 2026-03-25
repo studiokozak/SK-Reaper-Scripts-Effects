@@ -3,7 +3,7 @@
 
   <category name="MIDI">
     <reapack name="SK Drums Generator.lua" type="script" desc="SK Drums Generator : 16-step drum sequencer with velocity layers, presets and MIDI export">
-      <version name="1.0.1" author="Studio Kozak" time="2026-03-07">
+      <version name="1.1" author="Studio Kozak" time="2026-03-07">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Drums%20Generator.lua</source>
       </version>
     </reapack>
