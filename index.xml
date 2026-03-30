@@ -41,7 +41,11 @@
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Cue%20Bus%20Manager_EN.lua</source>
       </version>
   </reapack>
-
+   <reapack name="SK VCA Manager.lua" type="script" desc="SK VCA Manager.lua">
+      <version name="1.0" author="Studio Kozak" time="2026-03-31">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20VCA%20Manager.lua</source>
+      </version>
+  </reapack>  
   </category>
 
 </index>
