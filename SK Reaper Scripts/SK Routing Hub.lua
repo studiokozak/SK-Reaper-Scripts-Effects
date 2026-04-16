@@ -1,10 +1,9 @@
 -- =============================================================================
---  SK Routing Hub v1.0
---  Studio Kozak — Stéphan Kozak
---  Lua ReaScript + ReaImGui >= 0.9
+--  SK Routing Hub
+--  Studio Kozak — Stéphan Jedrasiak
 -- =============================================================================
 
-local SCRIPT_NAME = "SK Routing Hub v1.0"
+local SCRIPT_NAME = "SK Routing Hub v1.0.1"
 local WIN_W, WIN_H = 960, 720
 local COL_LEFT_W   = 290
 
@@ -461,6 +460,14 @@ local function action_create_folder(folder_name, reaper_col)
     local close_tr = reaper.GetTrack(0, last_pos)
     local d = reaper.GetMediaTrackInfo_Value(close_tr, "I_FOLDERDEPTH")
     reaper.SetMediaTrackInfo_Value(close_tr, "I_FOLDERDEPTH", d - 1)
+  end
+
+  -- Réactiver l'envoi au master sur les pistes enfants
+  -- (elles étaient peut-être coupées avant de rejoindre le folder)
+  for _, s in ipairs(sel) do
+    if reaper.ValidatePtr(s.track, "MediaTrack*") then
+      reaper.SetMediaTrackInfo_Value(s.track, "B_MAINSEND", 1)
+    end
   end
 
   reaper.SetOnlyTrackSelected(folder_tr)
@@ -2308,8 +2315,19 @@ local function draw_left(all_tracks_unused)
       or  "Create 1 track##new_tr_ok"
     if col_btn(lbl, C.send_col, 0x4A9A6AFF) then
       reaper.Undo_BeginBlock()
+      -- Position d'insertion : après la dernière piste sélectionnée,
+      -- ou à la fin du projet si aucune piste n'est sélectionnée
+      local base_insert = reaper.CountTracks(0)
+      if #state.sel_tracks > 0 then
+        local last_pos = 0
+        for _, st in ipairs(state.sel_tracks) do
+          local p = math.floor(reaper.GetMediaTrackInfo_Value(st, "IP_TRACKNUMBER"))
+          if p > last_pos then last_pos = p end
+        end
+        base_insert = last_pos  -- IP_TRACKNUMBER est 1-based, InsertTrackAtIndex est 0-based
+      end
       for i = 1, state.new_track_count do
-        local insert_at = reaper.CountTracks(0)
+        local insert_at = base_insert + (i - 1)
         reaper.InsertTrackAtIndex(insert_at, true)
         local new_tr = reaper.GetTrack(0, insert_at)
         if state.new_track_name ~= "" then
