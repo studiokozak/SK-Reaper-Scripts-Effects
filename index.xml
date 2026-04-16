@@ -3,12 +3,12 @@
 
   <category name="MIDI">
     <reapack name="SK Drums Generator.lua" type="script" desc="SK Drums Generator : 16-step drum sequencer with velocity layers, presets and MIDI export">
-      <version name="1.1" author="Studio Kozak" time="2026-03-07">
+      <version name="1.1" author="Studio Kozak" time="2026-03-07T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Drums%20Generator.lua</source>
       </version>
     </reapack>
     <reapack name="SK Harmonic Compass.lua" type="script" desc="SK Harmonic Compass : Circle of fifths chord inserter with voicing, modes and patterns">
-      <version name="2.1" author="Studio Kozak" time="2026-03-07">
+      <version name="2.1" author="Studio Kozak" time="2026-03-07T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Harmonic%20Compass.lua</source>
       </version>
     </reapack>
@@ -16,41 +16,41 @@
 
   <category name="LoFi">
     <reapack name="SK Analog Drift Engine" type="effect" desc="SK Analog Drift Engine : Analog tape and cassette drift simulator with wow, flutter and saturation">
-      <version name="1.0" author="Studio Kozak" time="2026-03-07">
+      <version name="1.0" author="Studio Kozak" time="2026-03-07T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Effects/SK%20Analog%20Drift%20Engine</source>
       </version>
     </reapack>
   </category>
 
-    <category name="FX/Dynamics">
+  <category name="FX/Dynamics">
     <reapack name="SK Snapback" type="effect" desc="SK Snapback : Synthetic pre-hit sweep generator">
-      <version name="1.0" author="Studio Kozak" time="2026-03-22">
+      <version name="1.0" author="Studio Kozak" time="2026-03-22T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Effects/SK%20Snapback</source>
       </version>
     </reapack>
   </category>
 
   <category name="Tools">
-    <reapack name="SK Cue Bus Manager_FR.lua" type="script" desc="SK Cue Bus Manager_FR.lua">
-      <version name="1.3" author="Studio Kozak" time="2026-03-20">
+    <reapack name="SK Cue Bus Manager_FR.lua" type="script" desc="SK Cue Bus Manager : Headphone monitoring console with VU-meters and routing (FR)">
+      <version name="1.3" author="Studio Kozak" time="2026-03-20T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Cue%20Bus%20Manager_FR.lua</source>
       </version>
     </reapack>
-   <reapack name="SK Cue Bus Manager_EN.lua" type="script" desc="SK Cue Bus Manager_EN.lua">
-      <version name="1.3" author="Studio Kozak" time="2026-03-20">
+    <reapack name="SK Cue Bus Manager_EN.lua" type="script" desc="SK Cue Bus Manager : Headphone monitoring console with VU-meters and routing (EN)">
+      <version name="1.3" author="Studio Kozak" time="2026-03-20T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Cue%20Bus%20Manager_EN.lua</source>
       </version>
-  </reapack>
-   <reapack name="SK VCA Manager.lua" type="script" desc="SK VCA Manager.lua">
-      <version name="1.0" author="Studio Kozak" time="2026-03-31">
+    </reapack>
+    <reapack name="SK VCA Manager.lua" type="script" desc="SK VCA Manager : Native REAPER VCA group manager">
+      <version name="1.0" author="Studio Kozak" time="2026-03-31T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20VCA%20Manager.lua</source>
       </version>
-  </reapack>  
-  <reapack name="SK Routing Hub.lua" type="script" desc="SK Routing Hub.lua">
-      <version name="1.0" author="Studio Kozak" time="2026-04-16">
+    </reapack>
+    <reapack name="SK Routing Hub.lua" type="script" desc="SK Routing Hub : Comprehensive routing management tool">
+      <version name="1.0" author="Studio Kozak" time="2026-04-16T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Routing%20Hub.lua</source>
       </version>
-  </reapack>  
+    </reapack>
   </category>
 
 </index>
