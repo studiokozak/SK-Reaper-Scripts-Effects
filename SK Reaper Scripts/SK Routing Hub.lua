@@ -1,9 +1,9 @@
 -- =============================================================================
---  SK Routing Hub
---  Studio Kozak — Stéphan Jedrasiak
+--  SK Routing Hub v1.1
+--  Studio Kozak — Stéphan JEDRASIAK
 -- =============================================================================
 
-local SCRIPT_NAME = "SK Routing Hub v1.0.1"
+local SCRIPT_NAME = "SK Routing Hub v1.1"
 local WIN_W, WIN_H = 960, 720
 local COL_LEFT_W   = 290
 
@@ -241,8 +241,7 @@ end
 local function apply_np(src_track, dst_track, send_idx, np, cat)
   cat = cat or 0
 
-  -- Sauvegarder les I_SRCCHAN de tous les sends existants de src_track
-  -- avant d'augmenter I_NCHAN (REAPER peut les décaler)
+  -- Préserver les canaux des sends existants avant modification
   local saved_srcchan = {}
   local ns = reaper.GetTrackNumSends(src_track, 0)
   for i = 0, ns - 1 do
@@ -275,7 +274,7 @@ local function action_create_sends(src_tracks, dst_tracks, np)
   reaper.PreventUIRefresh(1)
   local count = 0
 
-  -- Créer les sends (canaux 1-2 par défaut, modifiables ensuite via Bulk edit)
+  -- Créer les sends (canaux 1-2 par défaut)
   for _, src in ipairs(src_tracks) do
     for _, dst in ipairs(dst_tracks) do
       if src ~= dst then
@@ -417,12 +416,6 @@ local function action_create_folder(folder_name, reaper_col)
   end
   reaper.SetMediaTrackInfo_Value(folder_tr, "I_FOLDERDEPTH", 1)
 
-  --
-  -- Stratégie :
-  --   - Les pistes sélectionnées (simples ou folders) deviennent enfants du nouveau folder.
-  --   - Pour les pistes simples : depth = 0 (enfant standard)
-  --   - Pour les folders : depth += 1 (sous-folder)
-  --   - La dernière piste sélectionnée (ou fin du dernier sous-folder) ferme le nouveau folder.
 
   local total = reaper.CountTracks(0)
 
@@ -768,7 +761,7 @@ local function action_create_vca(vca_name, reaper_col, mute_lead, solo_lead)
   state.focused_track   = nil
 end
 
--- Retire tous les slaves d'un groupe VCA quand le master est retiré ou supprimé
+-- Retire tous les slaves d'un groupe VCA
 local function remove_vca_slaves(bit)
   for i = 0, reaper.CountTracks(0) - 1 do
     local tr = reaper.GetTrack(0, i)
@@ -777,6 +770,201 @@ local function remove_vca_slaves(bit)
       reaper.GetSetTrackGroupMembership(tr, "VOLUME_VCA_SLAVE", bit, 0)
       reaper.GetSetTrackGroupMembership(tr, "MUTE_SLAVE",       bit, 0)
       reaper.GetSetTrackGroupMembership(tr, "SOLO_SLAVE",       bit, 0)
+    end
+  end
+end
+
+-- Conversion volume linéaire <-> dB
+local function vol_to_db(v)
+  if v <= 0 then return -math.huge end
+  return 20 * math.log(v, 10)
+end
+
+local function db_to_vol(db)
+  if db <= -150 then return 0 end
+  return 10 ^ (db / 20)
+end
+
+-- Knob circulaire 16x16 pour le volume d'un send
+-- Retourne new_vol (linéaire) si modifié, nil sinon
+-- Gère : drag vertical, Ctrl+drag fin, double-clic reset, clic droit saisie
+local KNOB_STATE = {}  -- { dragging, start_y, start_vol, popup_open, popup_buf }
+
+local function draw_vol_knob(uid, vol, bulk_edit, track, cat, s, other, is_recv)
+  local KS = 16  -- taille du knob
+  local db  = vol_to_db(vol)
+  local new_vol = nil
+
+  -- Normalisation non-linéaire : plus de résolution autour de 0 dB
+  local function vol_to_norm(v)
+    if v <= 0 then return 0 end
+    -- Mapper 0..2 (soit -inf..+6dB) vers 0..1
+    local clamped = math.min(v, db_to_vol(6))
+    return (clamped / db_to_vol(6)) ^ (1/3)
+  end
+
+  local norm = vol_to_norm(vol)
+
+  -- Arc de 7h à 5h, course 270°
+  local math_pi = math.pi
+  local angle_min = math_pi * 0.75   -- 7h : 135° en trigo = bas-gauche
+  local angle_max = angle_min + math_pi * 1.5  -- +270° dans le sens horaire écran
+  local angle = angle_min + norm * (angle_max - angle_min)
+
+  -- Bouton invisible pour capturer les interactions
+  local draw = reaper.ImGui_GetWindowDrawList(ctx)
+  local clicked = reaper.ImGui_InvisibleButton(ctx, "##knob_"..uid, KS, KS)
+  local hovered = reaper.ImGui_IsItemHovered(ctx)
+  local active  = reaper.ImGui_IsItemActive(ctx)
+  local cx, cy  = reaper.ImGui_GetItemRectMin(ctx)
+  cx = cx + KS/2 ; cy = cy + KS/2
+  local R = KS/2 - 1
+
+  -- Dessin du fond
+  reaper.ImGui_DrawList_AddCircleFilled(draw, cx, cy, R, 0x2A2A2AFF)
+  reaper.ImGui_DrawList_AddCircle(draw, cx, cy, R, 0x555555FF)
+
+  -- Arc de progression
+  local arc_col = vol > 1.001 and 0xFF8800FF or 0xCCAA00FF
+  local seg = 32
+  for i = 0, seg - 1 do
+    local t0 = i / seg
+    local t1 = (i+1) / seg
+    if t0 <= norm then
+      local a0 = angle_min + t0 * (angle_max - angle_min)
+      local a1 = angle_min + math.min(t1, norm) * (angle_max - angle_min)
+      local x0 = cx + (R-1) * math.cos(a0)
+      local y0 = cy + (R-1) * math.sin(a0)
+      local x1 = cx + (R-1) * math.cos(a1)
+      local y1 = cy + (R-1) * math.sin(a1)
+      reaper.ImGui_DrawList_AddLine(draw, x0, y0, x1, y1, arc_col, 2)
+    end
+  end
+
+
+
+  -- Infobulle au survol
+  if hovered then
+    local db_str = db < -100 and "-inf dB" or string.format("%.1f dB", db)
+    reaper.ImGui_SetTooltip(ctx, db_str)
+  end
+
+
+
+  -- Drag vertical
+  local ks = KNOB_STATE[uid]
+  if not ks then
+    ks = { dragging = false, start_y = 0, start_vol = 1.0, popup_open = false, popup_buf = "0.0" }
+    KNOB_STATE[uid] = ks
+  end
+
+  if active and reaper.ImGui_IsMouseDown(ctx, 0) then
+    if not ks.dragging then
+      ks.dragging  = true
+      local _, smy = reaper.ImGui_GetMousePos(ctx)
+      ks.start_y   = smy
+      ks.start_vol = vol
+    else
+      local _, my = reaper.ImGui_GetMousePos(ctx)
+      local dy = ks.start_y - my  -- positif = monter = augmenter
+      local ctrl = reaper.ImGui_GetKeyMods(ctx) & reaper.ImGui_Mod_Ctrl() ~= 0
+      local sens = ctrl and 0.03 or 0.3  -- dB par pixel
+      local start_db = vol_to_db(ks.start_vol)
+      if start_db < -100 then start_db = -60 end
+      local target_db = math.min(6.0, start_db + dy * sens)
+      new_vol = target_db < -100 and 0 or db_to_vol(target_db)
+    end
+  else
+    ks.dragging = false
+  end
+
+  -- Clic droit : popup saisie dB
+  if hovered and reaper.ImGui_IsMouseClicked(ctx, 1) then
+    ks.popup_open = true
+    ks.popup_buf  = db < -100 and "-inf" or string.format("%.1f", db)
+    reaper.ImGui_OpenPopup(ctx, "knob_db_"..uid)
+  end
+  if reaper.ImGui_BeginPopup(ctx, "knob_db_"..uid) then
+    reaper.ImGui_Text(ctx, "Volume (dB):")
+    reaper.ImGui_SetNextItemWidth(ctx, 100)
+    if reaper.ImGui_IsWindowAppearing(ctx) then
+      reaper.ImGui_SetKeyboardFocusHere(ctx)
+    end
+    local function parse_db_input(buf)
+      local s = buf:lower():gsub("%s", "")
+      if s == "-inf" or s == "inf-" then return 0 end
+      local val = tonumber(s)
+      if val then return db_to_vol(math.min(6.0, val)) end
+      return nil
+    end
+    -- InputText sans EnterReturnsTrue pour mettre à jour popup_buf à chaque frappe
+    local _, nv = reaper.ImGui_InputText(ctx, "##kdb_"..uid, ks.popup_buf,
+      reaper.ImGui_InputTextFlags_AutoSelectAll())
+    if nv ~= nil then ks.popup_buf = nv end
+    -- Entrée clavier
+    if reaper.ImGui_IsItemFocused(ctx) and
+       reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Enter()) then
+      local v = parse_db_input(ks.popup_buf)
+      if v ~= nil then new_vol = v end
+      reaper.ImGui_CloseCurrentPopup(ctx)
+    end
+    reaper.ImGui_SameLine(ctx, 0, 4)
+    if reaper.ImGui_Button(ctx, "OK##kdb_ok_"..uid) then
+      local v = parse_db_input(ks.popup_buf)
+      if v ~= nil then new_vol = v end
+      reaper.ImGui_CloseCurrentPopup(ctx)
+    end
+    reaper.ImGui_Spacing(ctx)
+    reaper.ImGui_Separator(ctx)
+    reaper.ImGui_Spacing(ctx)
+    if reaper.ImGui_Button(ctx, "Reset 0 dB##kdb_rst_"..uid) then
+      new_vol = 1.0
+      reaper.ImGui_CloseCurrentPopup(ctx)
+    end
+    reaper.ImGui_EndPopup(ctx)
+  end
+
+  -- Appliquer le nouveau volume si modifié
+  if new_vol ~= nil then
+    -- Calculer le delta en dB pour le bulk edit
+    local old_db = vol_to_db(vol)
+    local new_db = vol_to_db(new_vol)
+    local delta_db = new_db - (old_db < -100 and -60 or old_db)
+
+    action_set_send_field(track, cat, s.idx, "D_VOL", new_vol)
+
+    if bulk_edit then
+      -- Bulk edit : propager le delta dB en préservant les balances
+      if cat == 0 then
+        local sel_set = {}
+        for _, t in ipairs(state.sel_tracks) do sel_set[t] = true end
+        for _, src in ipairs(state.sel_tracks) do
+          local sends = get_sends(src)
+          for _, sv in ipairs(sends) do
+            if not sel_set[sv.dest] and sv.dest == (is_recv and nil or other) then
+              if sv.idx ~= s.idx or src ~= track then
+                local cur_db = vol_to_db(sv.vol)
+                if cur_db < -100 then cur_db = -60 end
+                local tgt = db_to_vol(math.min(6.0, cur_db + delta_db))
+                action_set_send_field(src, 0, sv.idx, "D_VOL", tgt)
+              end
+            end
+          end
+        end
+      else
+        -- Receives
+        if is_recv and other then
+          local recvs = get_receives(track)
+          for _, rv in ipairs(recvs) do
+            if rv.idx ~= s.idx then
+              local cur_db = vol_to_db(rv.vol)
+              if cur_db < -100 then cur_db = -60 end
+              local tgt = db_to_vol(math.min(6.0, cur_db + delta_db))
+              action_set_send_field(track, -1, rv.idx, "D_VOL", tgt)
+            end
+          end
+        end
+      end
     end
   end
 end
@@ -1134,6 +1322,13 @@ local function send_row(track, s, uid, cat, all_tracks, bulk_edit)
 
   reaper.ImGui_SameLine(ctx, col_name_x)
 
+  -- Knob volume (centré verticalement sur ROW_H=20)
+  local knob_cy = reaper.ImGui_GetCursorPosY(ctx)
+  reaper.ImGui_SetCursorPosY(ctx, knob_cy + (ROW_H - 16) * 0.5)
+  draw_vol_knob(u, s.vol, bulk_edit, track, cat, s, other, is_recv)
+  reaper.ImGui_SetCursorPosY(ctx, knob_cy)
+  reaper.ImGui_SameLine(ctx, 0, 4)
+
   -- Mode
   reaper.ImGui_SetNextItemWidth(ctx, 152)
   local cmi, nmi = reaper.ImGui_Combo(ctx, "##mode_"..u, sm_to_idx(s.mode)-1, SM_STR)
@@ -1329,8 +1524,7 @@ local function panel_sends(all_tracks)
 
     if #vis > 0 then
       any = true
-      -- Sous-header : simple ligne colorée sans BeginChild
-      if nb > 1 then
+        if nb > 1 then
         local sc = rcolor(src)
         reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        sc)
         reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), sc)
