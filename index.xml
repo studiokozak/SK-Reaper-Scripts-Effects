@@ -47,7 +47,7 @@
       </version>
     </reapack>
     <reapack name="SK Routing Hub.lua" type="script" desc="SK Routing Hub : Comprehensive routing management tool">
-      <version name="1.0.1" author="Studio Kozak" time="2026-04-16T00:00:00Z">
+      <version name="1.1" author="Studio Kozak" time="2026-04-16T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Routing%20Hub.lua</source>
       </version>
     </reapack>
