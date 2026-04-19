@@ -3,7 +3,7 @@
 --  Studio Kozak — Stéphan JEDRASIAK
 -- =============================================================================
 
-local SCRIPT_NAME = "SK Routing Hub v1.1"
+local SCRIPT_NAME = "SK Routing Hub v1.2"
 local WIN_W, WIN_H = 960, 720
 local COL_LEFT_W   = 290
 
@@ -122,6 +122,7 @@ local state = {
   ctx_menu_track    = nil,   -- piste visée par le menu contextuel
   new_track_count = 1,      -- nombre de pistes à créer
   -- Paramètres persistants de création de send
+  new_send_count = 1,    -- nombre de sends à créer par destination
   np = {
     mode_idx  = 1,
     mono      = false,
@@ -1187,15 +1188,30 @@ local function draw_create_popup(all_tracks, src_tracks)
   reaper.ImGui_Separator(ctx)
   reaper.ImGui_Spacing(ctx)
 
-  -- Boutons OK / Annuler
   -- Compte les destinations cochées
   local dsts = {}
   for _, dt in ipairs(all_tracks) do
     if state.dest_checked[tostring(dt)] then dsts[#dsts+1] = dt end
   end
+
+  -- Nombre de sends à créer par destination
+  reaper.ImGui_AlignTextToFramePadding(ctx)
+  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), C.text_dim)
+  reaper.ImGui_Text(ctx, "Sends per destination:")
+  reaper.ImGui_PopStyleColor(ctx, 1)
+  reaper.ImGui_SameLine(ctx, 0, 6)
+  reaper.ImGui_SetNextItemWidth(ctx, 60)
+  local nsc, nsv = reaper.ImGui_InputInt(ctx, "##new_send_count", state.new_send_count)
+  if nsc then state.new_send_count = math.max(1, math.min(16, nsv)) end
+  reaper.ImGui_Spacing(ctx)
+
+  -- Boutons Create / Cancel
+  local total_sends = #dsts * state.new_send_count
   local ok_label = #dsts > 0
-    and string.format("Creer (%d dst)##ok", #dsts)
-    or  "Creer##ok_dis"
+    and (total_sends == 1
+      and "Create (1 send)##ok"
+      or  string.format("Create (%d sends)##ok", total_sends))
+    or  "Create##ok_dis"
   local can_create = #dsts > 0
 
   if not can_create then
@@ -1203,9 +1219,12 @@ local function draw_create_popup(all_tracks, src_tracks)
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x333333FF)
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),          C.text_dim)
   end
-  if reaper.ImGui_Button(ctx, ok_label, 120) and can_create then
-    action_create_sends(src_tracks, dsts, np)
+  if reaper.ImGui_Button(ctx, ok_label, 140) and can_create then
+    for _ = 1, state.new_send_count do
+      action_create_sends(src_tracks, dsts, np)
+    end
     popup_filter = "" ; state.dest_checked = {}
+    state.new_send_count = 1
     reaper.ImGui_CloseCurrentPopup(ctx)
   end
   if not can_create then reaper.ImGui_PopStyleColor(ctx, 3) end
@@ -1214,6 +1233,7 @@ local function draw_create_popup(all_tracks, src_tracks)
   if reaper.ImGui_Button(ctx, "Cancel", 80) then
     popup_filter = "" ; popup_newname = ""
     state.dest_checked = {}
+    state.new_send_count = 1
     reaper.ImGui_CloseCurrentPopup(ctx)
   end
 
