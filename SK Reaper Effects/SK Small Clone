@@ -1,0 +1,176 @@
+desc:SK Small Clone
+// =============================================================================
+// Studio Kozak — SK Small Clone
+// Émulation de la pédale chorus Electro-Harmonix Small Clone
+// (circuit MN3007, 1024 stages BBD).
+//
+// SIGNAL FLOW :
+//   Entrée mono (L+R) → saturation douce → filtre anti-aliasing LP
+//   → ligne à retard modulée (BBD) → filtre de reconstruction LP
+//   → mix dry/wet → sortie stéréo (R en opposition de phase avec L)
+//
+// Le LFO est une onde triangulaire (caractéristique du Small Clone),
+// modulant le delay time autour d'un centre fixe de 20 ms.
+// Depth Shallow : ±3 ms — Depth Deep : ±10 ms.
+//
+// ROUTING :
+//   Entrée  : spl0 + spl1
+//   Sortie  : spl0 (L), spl1 (R, phase inversée — stéréo naturelle)
+// =============================================================================
+
+in_pin:Input L
+in_pin:Input R
+out_pin:Output L
+out_pin:Output R
+
+slider1:20<0,100,1>Rate
+slider2:0<0,1,1{Shallow,Deep}>Depth
+slider3:50<0,100,1>Mix (%)
+slider4:4<-12,12,0.1>Output Level (dB)
+
+@init
+
+TWO_PI = 2.0 * $pi;
+
+// ── Paramètres BBD (calqués sur le circuit MN3007) ────────────────────────
+SC_DELAY_CENTRE_MS  = 20.0;   // delay nominal BBD
+SC_DEPTH_SHALLOW_MS = 3.0;    // modulation Shallow ±ms
+SC_DEPTH_DEEP_MS    = 10.0;   // modulation Deep ±ms
+SC_DRIVE            = 1.15;   // saturation douce (émulation JRC4558)
+SC_DRIVE_INV        = 1.0 / SC_DRIVE;
+SC_AA_FC            = 3500.0; // filtre anti-aliasing entrée BBD (Hz)
+SC_REC_FC           = 4500.0; // filtre de reconstruction sortie BBD (Hz)
+SC_BUF_MAX_MS       = 50.0;   // taille du circular buffer
+
+// ── Circular buffer ───────────────────────────────────────────────────────
+// buf_L : [0 .. sk_buf_len-1]
+// buf_R : [sk_buf_len .. 2*sk_buf_len-1]
+sk_buf_len = ceil(SC_BUF_MAX_MS * 0.001 * srate) + 4;
+sk_buf_L   = 0;
+sk_buf_R   = sk_buf_len;
+memset(sk_buf_L, 0, sk_buf_len);
+memset(sk_buf_R, 0, sk_buf_len);
+sk_wptr    = 0;
+
+// ── Filtres LP 1-pôle RC ──────────────────────────────────────────────────
+// coef = exp(-2π × fc / srate) ; application : s = coef×s + (1-coef)×input
+sk_aa_coef   = exp(-TWO_PI * SC_AA_FC  / srate);
+sk_rec_coef  = exp(-TWO_PI * SC_REC_FC / srate);
+sk_aa_gain   = 1.0 - sk_aa_coef;
+sk_rec_gain  = 1.0 - sk_rec_coef;
+
+sk_aa_state_L  = 0.0;
+sk_aa_state_R  = 0.0;
+sk_rec_state_L = 0.0;
+sk_rec_state_R = 0.0;
+
+// ── LFO ───────────────────────────────────────────────────────────────────
+// Rate slider [0,100] → fréquence [0.2, 9.0] Hz, courbe exponentielle
+SC_RATE_MIN  = 0.2;
+SC_RATE_MAX  = 9.0;
+sk_lfo_phase = 0.0;
+sk_lfo_inc   = 0.0;
+
+// ── Delay / Mix / Gain ────────────────────────────────────────────────────
+sk_delay_ctr_smp = 0.0;
+sk_depth_smp     = 0.0;
+sk_wet           = 0.5;
+sk_dry           = 0.5;
+sk_out_gain      = 1.0;
+sk_srate_inv     = 1.0 / srate;
+
+// ── Saturation douce ──
+function _tanh(x) (
+  x > 3.0 ? 1.0 :
+  x < -3.0 ? -1.0 : (
+    _t_x2 = x * x;
+    x * (27.0 + _t_x2) / (27.0 + 9.0 * _t_x2)
+  )
+);
+
+@slider
+
+// Rate : courbe exponentielle → répartition perceptivement naturelle
+sk_rate_hz       = SC_RATE_MIN * pow(SC_RATE_MAX / SC_RATE_MIN, slider1 * 0.01);
+sk_lfo_inc       = sk_rate_hz * sk_srate_inv;
+
+// Depth : deux positions calquées sur le switch de la pédale d'origine
+sk_depth_smp     = (slider2 < 0.5 ? SC_DEPTH_SHALLOW_MS : SC_DEPTH_DEEP_MS)
+                   * 0.001 * srate;
+
+sk_delay_ctr_smp = SC_DELAY_CENTRE_MS * 0.001 * srate;
+
+sk_wet           = slider3 * 0.01;
+sk_dry           = 1.0 - sk_wet;
+
+// dB → gain linéaire : exp(dB × ln(10)/20)
+sk_out_gain      = exp(slider4 * 0.11512925);
+
+
+@sample
+
+// ── LFO triangle ─────────────────────────────────────────────────────────
+sk_lfo_phase += sk_lfo_inc;
+sk_lfo_phase >= 1.0 ? sk_lfo_phase -= 1.0;
+
+// Canal L
+sp_lfo_L = sk_lfo_phase < 0.5
+           ? (4.0 * sk_lfo_phase - 1.0)
+           : (3.0 - 4.0 * sk_lfo_phase);
+
+// Canal R : phase décalée de 180°
+sp_phase_R = sk_lfo_phase + 0.5;
+sp_phase_R >= 1.0 ? sp_phase_R -= 1.0;
+sp_lfo_R = sp_phase_R < 0.5
+           ? (4.0 * sp_phase_R - 1.0)
+           : (3.0 - 4.0 * sp_phase_R);
+
+// Delay instantané par canal
+sp_delay_L = max(1.0, min(sk_buf_len - 2.0,
+             sk_delay_ctr_smp + sp_lfo_L * sk_depth_smp));
+sp_delay_R = max(1.0, min(sk_buf_len - 2.0,
+             sk_delay_ctr_smp + sp_lfo_R * sk_depth_smp));
+
+// ── Signal d'entrée ───────────────────────────────────────────────────────
+sp_in  = (spl0 + spl1) * 0.5;
+sp_sat = _tanh(sp_in * SC_DRIVE) * SC_DRIVE_INV;
+
+// ── Filtre anti-aliasing + écriture buffer ────────────────────────────────
+sk_aa_state_L = sk_aa_coef * sk_aa_state_L + sk_aa_gain * sp_sat;
+sk_aa_state_R = sk_aa_coef * sk_aa_state_R + sk_aa_gain * sp_sat;
+mem[sk_buf_L + sk_wptr] = sk_aa_state_L;
+mem[sk_buf_R + sk_wptr] = sk_aa_state_R;
+
+// ── Lecture fractionnaire L ───────────────────────────────────────────────
+sp_rptr_L_f = sk_wptr - sp_delay_L + sk_buf_len;
+sp_rptr_L_i = floor(sp_rptr_L_f);
+sp_frac_L   = sp_rptr_L_f - sp_rptr_L_i;
+sp_idx_L0   = sp_rptr_L_i;
+sp_idx_L0 >= sk_buf_len ? sp_idx_L0 -= sk_buf_len;
+sp_idx_L1   = sp_idx_L0 - 1;
+sp_idx_L1 < 0 ? sp_idx_L1 += sk_buf_len;
+sp_wet_L    = mem[sk_buf_L + sp_idx_L0]
+              + sp_frac_L * (mem[sk_buf_L + sp_idx_L1] - mem[sk_buf_L + sp_idx_L0]);
+
+// ── Lecture fractionnaire R ───────────────────────────────────────────────
+sp_rptr_R_f = sk_wptr - sp_delay_R + sk_buf_len;
+sp_rptr_R_i = floor(sp_rptr_R_f);
+sp_frac_R   = sp_rptr_R_f - sp_rptr_R_i;
+sp_idx_R0   = sp_rptr_R_i;
+sp_idx_R0 >= sk_buf_len ? sp_idx_R0 -= sk_buf_len;
+sp_idx_R1   = sp_idx_R0 - 1;
+sp_idx_R1 < 0 ? sp_idx_R1 += sk_buf_len;
+sp_wet_R    = mem[sk_buf_R + sp_idx_R0]
+              + sp_frac_R * (mem[sk_buf_R + sp_idx_R1] - mem[sk_buf_R + sp_idx_R0]);
+
+// ── Filtre de reconstruction + mix + sortie ───────────────────────────────
+sk_rec_state_L = sk_rec_coef * sk_rec_state_L + sk_rec_gain * sp_wet_L;
+sk_rec_state_R = sk_rec_coef * sk_rec_state_R + sk_rec_gain * sp_wet_R;
+
+spl0 = (sp_in * sk_dry + sk_rec_state_L * sk_wet) * sk_out_gain;
+spl1 = (sp_in * sk_dry + sk_rec_state_R * sk_wet) * sk_out_gain;
+
+// ── Avance du pointeur d'écriture ─────────────────────────────────────────
+sk_wptr += 1;
+sk_wptr >= sk_buf_len ? sk_wptr = 0;
+
