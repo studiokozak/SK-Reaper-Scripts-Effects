@@ -28,6 +28,11 @@
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Effects/SK%20Snapback</source>
       </version>
     </reapack>
+    <reapack name="SK Small Clone" type="effect" desc="SK Small Clone : Small Clone Pedal Emulation">
+      <version name="1.0" author="Studio Kozak" time="2026-05-22T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Effects/SK%20Small%20Clone</source>
+      </version>
+    </reapack>
   </category>
 
   <category name="Tools">
