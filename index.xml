@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <index version="1.0" name="Studio Kozak">
-
   <category name="MIDI">
     <reapack name="SK Drums Generator.lua" type="script" desc="SK Drums Generator : 16-step drum sequencer with velocity layers, presets and MIDI export">
       <version name="1.1" author="Studio Kozak" time="2026-03-07T00:00:00Z">
@@ -13,7 +12,6 @@
       </version>
     </reapack>
   </category>
-
   <category name="LoFi">
     <reapack name="SK Analog Drift Engine" type="effect" desc="SK Analog Drift Engine : Analog tape and cassette drift simulator with wow, flutter and saturation">
       <version name="1.0" author="Studio Kozak" time="2026-03-07T00:00:00Z">
@@ -21,7 +19,6 @@
       </version>
     </reapack>
   </category>
-
   <category name="FX/Dynamics">
     <reapack name="SK Snapback" type="effect" desc="SK Snapback : Synthetic pre-hit sweep generator">
       <version name="1.0" author="Studio Kozak" time="2026-03-22T00:00:00Z">
@@ -34,7 +31,6 @@
       </version>
     </reapack>
   </category>
-
   <category name="Tools">
     <reapack name="SK Cue Bus Manager_FR.lua" type="script" desc="SK Cue Bus Manager : Headphone monitoring console with VU-meters and routing (FR)">
       <version name="1.3" author="Studio Kozak" time="2026-03-20T00:00:00Z">
@@ -56,6 +52,10 @@
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Routing%20Hub.lua</source>
       </version>
     </reapack>
+    <reapack name="SK Scripts Organizer.lua" type="script" desc="SK Scripts Organizer : Categorized launcher to organize and run all your ReaScripts">
+      <version name="1.0" author="Studio Kozak" time="2026-06-19T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Scripts%20Organizer.lua</source>
+      </version>
+    </reapack>
   </category>
-
 </index>
