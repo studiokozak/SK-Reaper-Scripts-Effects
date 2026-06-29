@@ -30,6 +30,11 @@
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Effects/SK%20Small%20Clone</source>
       </version>
     </reapack>
+    <reapack name="SK Gristleizer" type="effect" desc="SK Gristleizer : Gristleizer-inspired tremolo and VCF filter modulation effect">
+      <version name="1.0" author="Studio Kozak" time="2026-06-29T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Effects/SK%20Gristleizer</source>
+      </version>
+    </reapack>
   </category>
   <category name="Tools">
     <reapack name="SK Cue Bus Manager_FR.lua" type="script" desc="SK Cue Bus Manager : Headphone monitoring console with VU-meters and routing (FR)">
