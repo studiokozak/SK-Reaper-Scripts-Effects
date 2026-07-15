@@ -1,9 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <index version="1.0" name="Studio Kozak">
   <category name="MIDI">
-    <reapack name="SK Drums Generator.lua" type="script" desc="SK Drums Generator : 16-step drum sequencer with velocity layers, presets and MIDI export">
-      <version name="1.1" author="Studio Kozak" time="2026-03-07T00:00:00Z">
+    <reapack name="SK Drums Generator.lua" type="script" desc="SK Drums Generator : 16-step drum sequencer with velocity layers, note preview, presets and MIDI export">
+      <version name="2.0" author="Studio Kozak" time="2026-07-15T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Drums%20Generator.lua</source>
+        <changelog><![CDATA[Rebuilt interface on the Studio Kozak dark/amber look.
+Step colours now follow the velocity legend on every instrument.
+Play / Stop and Preview buttons: Preview arms the target track on All MIDI Inputs so the note buttons audition through its sampler.
+Drum elements can be renamed, from the mapping panel or by double-clicking the name on the grid.
+The track a pattern was written to is remembered per project, so generating still works when nothing is selected in REAPER.
+Session tempo can be set from the top row.
+Regenerating replaces the previous pattern instead of stacking a new one over it, and counts as a single undo step.
+Timing and Var.Vel now default to 0.
+The auto-fill now closes bar 8 instead of bar 4.
+Saved patterns now remember their Swing, Timing and Var.Vel settings.
+The pattern being worked on is kept with the project, so closing the window no longer loses it.]]></changelog>
       </version>
     </reapack>
     <reapack name="SK Harmonic Compass.lua" type="script" desc="SK Harmonic Compass : Circle of fifths chord inserter with voicing, modes and patterns">
