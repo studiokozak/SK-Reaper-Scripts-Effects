@@ -1,6 +1,6 @@
 -- @description SK Drums Generator
 -- @author Studio Kozak
--- @version 2.0
+-- @version 2.1
 -- @provides [main] .
 -- @about
 --   A 16-step drum pattern sequencer that writes MIDI items into REAPER.
@@ -952,6 +952,10 @@ local function iconButton(id, kind, size, active)
   return clicked
 end
 
+-- Shortest gap between two velocity steps made with the wheel. Lower it if the
+-- wheel feels sluggish, raise it if one notch moves more than one layer.
+local WHEEL_STEP_GAP = 0.08
+
 local state = {
   bars            = 1,
   h_t             = 0,   -- timing spread, in MIDI ticks (0 = dead on the grid)
@@ -977,6 +981,8 @@ local ui_edit_focus    = false
 local ui_status        = ""
 local ui_status_time   = 0
 local ui_bpm           = nil
+local ui_wheel_time    = 0     -- when the wheel last moved a layer
+local ui_wheel_cell    = nil   -- which step it moved
 
 local note_inputs = {}
 for i, inst in ipairs(DRUM_MAP) do note_inputs[i] = inst.note end
@@ -1412,7 +1418,7 @@ local function loop()
           local step  = (state.current_page * 16) + s
           local layer = to_layer(grid[i][step])
           reaper.ImGui_TableSetColumnIndex(ctx, s)
-          reaper.ImGui_PushID(ctx, (i * 1000) + step)
+          reaper.ImGui_PushID(ctx, (i * 100000) + step)
 
           -- Cell colour follows the velocity layer, matching the legend.
           local btn_col, txt_col
@@ -1439,10 +1445,23 @@ local function loop()
             if state.vel_edit_mode and reaper.ImGui_IsItemHovered(ctx) then
               local wheel = reaper.ImGui_GetMouseWheel(ctx)
               if wheel ~= 0 then
-              local delta = wheel > 0 and 1 or -1
-              grid[i][step] = math.max(0, math.min(5, layer + delta))
+                -- Only the direction is used, never the amount. How much a
+                -- wheel reports for one notch is not the same from one machine
+                -- to the next, and a quick flick can report dozens of units at
+                -- once, so reading the amount would make a step mean something
+                -- different on every desk. Spacing steps out in time behaves
+                -- the same everywhere: one notch moves one layer, and a flick
+                -- moves one layer instead of slamming to the end.
+                local cell = (i * 100000) + step
+                local now  = reaper.time_precise()
+                if ui_wheel_cell ~= cell
+                   or (now - ui_wheel_time) >= WHEEL_STEP_GAP then
+                  ui_wheel_cell, ui_wheel_time = cell, now
+                  local dir = (wheel > 0) and 1 or -1
+                  grid[i][step] = math.max(0, math.min(5, layer + dir))
+                end
               end
-          end
+            end
           reaper.ImGui_PopStyleColor(ctx, 4)
           reaper.ImGui_PopID(ctx)
         end
