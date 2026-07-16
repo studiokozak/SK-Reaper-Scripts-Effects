@@ -2,6 +2,11 @@
 <index version="1.0" name="Studio Kozak">
   <category name="MIDI">
     <reapack name="SK Drums Generator.lua" type="script" desc="SK Drums Generator : 16-step drum sequencer with velocity layers, note preview, presets and MIDI export">
+      <version name="2.1" author="Studio Kozak" time="2026-07-16T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Drums%20Generator.lua</source>
+        <changelog><![CDATA[Fixed the mouse wheel running away on the velocity layers. On a device with smooth scrolling, a single scroll could jump straight from GHOST to FORTISSIMO. The wheel now reads only the direction of the scroll, never how far it went, since how far means something different on every machine.
+Fixed two steps sharing the same identity on patterns of 63 bars or more, which confused which cell was under the mouse.]]></changelog>
+      </version>
       <version name="2.0" author="Studio Kozak" time="2026-07-15T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Drums%20Generator.lua</source>
         <changelog><![CDATA[Rebuilt interface on the Studio Kozak dark/amber look.
