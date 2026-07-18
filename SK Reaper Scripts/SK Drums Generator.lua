@@ -1,6 +1,6 @@
 -- @description SK Drums Generator
 -- @author Studio Kozak
--- @version 2.2
+-- @version 2.3
 -- @provides [main] .
 -- @about
 --   A 16-step drum pattern sequencer that writes MIDI items into REAPER.
@@ -1345,7 +1345,7 @@ local function loop()
     reaper.ImGui_SameLine(ctx)
     reaper.ImGui_TextDisabled(ctx,
       state.vel_edit_mode
-        and "mouse wheel over a step sets its velocity"
+        and "left-click / wheel up = louder,  right-click / wheel down = softer"
         or "click = on/off")
 
     reaper.ImGui_Separator(ctx)
@@ -1443,33 +1443,38 @@ local function loop()
           reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(),  shade(btn_col, 0.80))
           reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),          txt_col)
           local label = (layer > 0) and (tostring(layer) .. "##b") or "##c"
-            if reaper.ImGui_Button(ctx, label, 25, 25) then
-               if state.vel_edit_mode then
-              grid[i][step] = (layer + 1) % 6
-              else
-               grid[i][step] = (layer == 0) and 3 or 0
+          if reaper.ImGui_Button(ctx, label, 25, 25) then
+            if state.vel_edit_mode then
+              grid[i][step] = math.min(5, layer + 1)    -- left: velocity up
+            else
+              grid[i][step] = (layer == 0) and 3 or 0   -- left: step on / off
             end
           end
-            if state.vel_edit_mode and reaper.ImGui_IsItemHovered(ctx) then
-              local wheel = reaper.ImGui_GetMouseWheel(ctx)
-              if wheel ~= 0 then
-                -- Only the direction is used, never the amount. How much a
-                -- wheel reports for one notch is not the same from one machine
-                -- to the next, and a quick flick can report dozens of units at
-                -- once, so reading the amount would make a step mean something
-                -- different on every desk. Spacing steps out in time behaves
-                -- the same everywhere: one notch moves one layer, and a flick
-                -- moves one layer instead of slamming to the end.
-                local cell = (i * 100000) + step
-                local now  = reaper.time_precise()
-                if ui_wheel_cell ~= cell
-                   or (now - ui_wheel_time) >= WHEEL_STEP_GAP then
-                  ui_wheel_cell, ui_wheel_time = cell, now
-                  local dir = (wheel > 0) and 1 or -1
-                  grid[i][step] = math.max(0, math.min(5, layer + dir))
-                end
+          -- Right click lowers the velocity, but only in edit mode. Outside it,
+          -- the right button is left free for a future micro-timing control.
+          if state.vel_edit_mode
+             and reaper.ImGui_IsItemClicked(ctx, reaper.ImGui_MouseButton_Right()) then
+            grid[i][step] = math.max(0, layer - 1)      -- right: velocity down
+          end
+          if state.vel_edit_mode and reaper.ImGui_IsItemHovered(ctx) then
+            local wheel = reaper.ImGui_GetMouseWheel(ctx)
+            if wheel ~= 0 then
+              -- Only the direction is used, never the amount. How much a wheel
+              -- reports for one notch is not the same from one machine to the
+              -- next, and a quick flick can report dozens of units at once, so
+              -- reading the amount would make a step mean something different on
+              -- every desk. Spacing steps out in time behaves the same
+              -- everywhere: one notch moves one layer, a flick moves one too.
+              local cell = (i * 100000) + step
+              local now  = reaper.time_precise()
+              if ui_wheel_cell ~= cell
+                 or (now - ui_wheel_time) >= WHEEL_STEP_GAP then
+                ui_wheel_cell, ui_wheel_time = cell, now
+                local dir = (wheel > 0) and 1 or -1
+                grid[i][step] = math.max(0, math.min(5, layer + dir))
               end
             end
+          end
           reaper.ImGui_PopStyleColor(ctx, 4)
           reaper.ImGui_PopID(ctx)
         end
