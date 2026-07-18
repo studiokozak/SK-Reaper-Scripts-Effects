@@ -751,7 +751,7 @@ local function preview_on()
   reaper.SetMediaTrackInfo_Value(tr, "I_RECARM",   1)
   reaper.SetMediaTrackInfo_Value(tr, "I_RECMON",   1)  -- needed to hear the track's FX
   preview.on = true
-  return true, ("Preview on: \"%s\" armed on All MIDI Inputs%s."):format(
+  return true, ("Track armed: \"%s\" on All MIDI Inputs%s."):format(
     track_name(tr), (src == "memory") and "  (remembered track)" or "")
 end
 
@@ -1236,19 +1236,27 @@ local function loop()
 
     -- Note and name assignment
 
-    local mapping_summary = ""
-    for i, inst in ipairs(DRUM_MAP) do
-      mapping_summary = mapping_summary
-        .. inst.name:sub(1, 3) .. ":" .. note_to_name(inst.note)
-      if i < #DRUM_MAP then mapping_summary = mapping_summary .. "  " end
-    end
-
     if reaper.ImGui_CollapsingHeader(ctx,
         "MIDI MAPPING##midi_mapping") then
-      reaper.ImGui_SameLine(ctx)
-      reaper.ImGui_TextDisabled(ctx, " —  " .. mapping_summary)
 
       reaper.ImGui_Spacing(ctx)
+
+      -- ARM button, sized to the height of the text buttons beside it so the
+      -- row lines up. Amber when the track is armed, grey when not. Arming
+      -- routes All MIDI Inputs to the target track, so the note buttons below
+      -- play through its sampler.
+      local arm_h = reaper.ImGui_GetFrameHeight(ctx)
+      if iconButton("##arm", 'circle', arm_h, preview.on) then
+        if preview.on then
+          preview_off()
+          ui_status = "Track disarmed, restored."
+        else
+          local ok, msg = preview_on()
+          ui_status = msg
+        end
+        ui_status_time = reaper.time_precise()
+      end
+      reaper.ImGui_SameLine(ctx)
 
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0x226622FF)
       if reaper.ImGui_Button(ctx, "SAVE MAPPING") then
@@ -1264,7 +1272,7 @@ local function loop()
       end
       reaper.ImGui_PopStyleColor(ctx)
       reaper.ImGui_SameLine(ctx)
-      reaper.ImGui_TextDisabled(ctx, "per-instrument note assignment (0 – 127)")
+      reaper.ImGui_TextDisabled(ctx, "arm the track, then click a note to hear it")
 
       reaper.ImGui_Spacing(ctx)
 
@@ -1304,7 +1312,7 @@ local function loop()
         if reaper.ImGui_Button(ctx, note_to_name(note_inputs[i]), 48, 0) then
           preview_note(note_inputs[i])
           if not preview.on then
-            ui_status      = "Enable PREVIEW (circle button) to hear auditioned notes."
+            ui_status      = "Arm the track first (round button) to hear the note."
             ui_status_time = reaper.time_precise()
           end
         end
@@ -1497,18 +1505,6 @@ local function loop()
     local playing = is_playing()
     if iconButton("##transport", playing and 'stop' or 'play', ACTION_H, playing) then
       transport_toggle()
-    end
-    reaper.ImGui_SameLine(ctx)
-
-    if iconButton("##preview", 'circle', ACTION_H, preview.on) then
-      if preview.on then
-        preview_off()
-        ui_status = "Preview off, track restored."
-      else
-        local ok, msg = preview_on()
-        ui_status = msg
-      end
-      ui_status_time = reaper.time_precise()
     end
     reaper.ImGui_SameLine(ctx)
 
