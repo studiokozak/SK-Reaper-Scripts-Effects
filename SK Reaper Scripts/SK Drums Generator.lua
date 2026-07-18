@@ -1,6 +1,6 @@
 -- @description SK Drums Generator
 -- @author Studio Kozak
--- @version 2.1
+-- @version 2.2
 -- @provides [main] .
 -- @about
 --   A 16-step drum pattern sequencer that writes MIDI items into REAPER.
