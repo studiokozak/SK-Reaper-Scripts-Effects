@@ -1,6 +1,6 @@
 -- @description SK Drums Generator
 -- @author Studio Kozak
--- @version 2.3
+-- @version 2.4
 -- @provides [main] .
 -- @about
 --   A 16-step drum pattern sequencer that writes MIDI items into REAPER.
@@ -1345,7 +1345,7 @@ local function loop()
     reaper.ImGui_SameLine(ctx)
     reaper.ImGui_TextDisabled(ctx,
       state.vel_edit_mode
-        and "left-click / wheel up = louder,  right-click / wheel down = softer"
+        and "left = louder,  right = softer,  Ctrl/Cmd-click = clear"
         or "click = on/off")
 
     reaper.ImGui_Separator(ctx)
@@ -1445,7 +1445,16 @@ local function loop()
           local label = (layer > 0) and (tostring(layer) .. "##b") or "##c"
           if reaper.ImGui_Button(ctx, label, 25, 25) then
             if state.vel_edit_mode then
-              grid[i][step] = math.min(5, layer + 1)    -- left: velocity up
+              -- Ctrl (Cmd on Mac) clears the step outright, so you don't have to
+              -- click a loud step all the way down to silence it.
+              local mods  = reaper.ImGui_GetKeyMods(ctx)
+              local clear = (mods & (reaper.ImGui_Mod_Ctrl()
+                                   | reaper.ImGui_Mod_Super())) ~= 0
+              if clear then
+                grid[i][step] = 0                       -- Ctrl/Cmd-click: clear
+              else
+                grid[i][step] = math.min(5, layer + 1)  -- left: velocity up
+              end
             else
               grid[i][step] = (layer == 0) and 3 or 0   -- left: step on / off
             end
