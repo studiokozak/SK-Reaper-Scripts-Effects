@@ -2,6 +2,10 @@
 <index version="1.0" name="Studio Kozak">
   <category name="MIDI">
     <reapack name="SK Drums Generator.lua" type="script" desc="SK Drums Generator : 16-step drum sequencer with velocity layers, note preview, presets and MIDI export">
+      <version name="2.4" author="Studio Kozak" time="2026-07-18T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Drums%20Generator.lua</source>
+        <changelog><![CDATA[In velocity mode, Ctrl-click (Cmd on macOS) on a step now clears it in one go, instead of clicking it all the way down.]]></changelog>
+      </version>
       <version name="2.3" author="Studio Kozak" time="2026-07-18T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Drums%20Generator.lua</source>
         <changelog><![CDATA[In velocity mode, you can now set a step's velocity with the mouse buttons: left-click raises it, right-click lowers it. The scroll wheel still works too. Outside velocity mode the right button does nothing for now.]]></changelog>
