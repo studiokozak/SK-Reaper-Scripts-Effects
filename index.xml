@@ -2,6 +2,11 @@
 <index version="1.0" name="Studio Kozak">
   <category name="MIDI">
     <reapack name="SK Drums Generator.lua" type="script" desc="SK Drums Generator : 16-step drum sequencer with velocity layers, note preview, presets and MIDI export">
+      <version name="2.5" author="Studio Kozak" time="2026-07-23T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Drums%20Generator.lua</source>
+        <changelog><![CDATA[RANDOM can now be aimed at a few drum elements only. Each row of the grid carries a small dice square on the left: when it is lit, RANDOM rewrites that row, when it is not, the row is left exactly as it is. Alt-click a square to keep that element alone and drop the others. The square on the BEAT row selects every element, or none.
+Your selection is remembered between sessions, and RANDOM is greyed out while nothing is selected. As before, it works on the bar you are looking at.]]></changelog>
+      </version>
       <version name="2.4" author="Studio Kozak" time="2026-07-18T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Drums%20Generator.lua</source>
         <changelog><![CDATA[In velocity mode, Ctrl-click (Cmd on macOS) on a step now clears it in one go, instead of clicking it all the way down.]]></changelog>
