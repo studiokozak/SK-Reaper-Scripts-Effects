@@ -1,57 +1,15 @@
 -- =============================================================================
 --  SK Cue Bus Manager
 --  Studio Kozak — https://github.com/StudioKozak
--- =============================================================================
 --
---  Console de monitoring casques intégrée dans REAPER.
---  Crée et gère des mix casques indépendants pour chaque musicien,
---  directement depuis une interface dédiée sans passer par le routing natif.
+--  Console de monitoring casques intégrée à REAPER. Crée et gère un mix casque
+--  (cue bus) indépendant par musicien — volume, panoramique, mute par piste,
+--  VU-mètre stéréo, snapshots A/B et assignation de sortie hardware — sans passer
+--  par le routing natif de REAPER.
 --
 --  Prérequis : ReaImGui (installer via ReaPack)
---
---  DÉMARRAGE RAPIDE
---  ─────────────────
---  1. Cliquez [+ Nouveau Cue] pour créer un casque.
---     Choisissez sa couleur et sa sortie hardware dans la fenêtre de création.
---
---  2. Sélectionnez le cue dans la liste de gauche.
---
---  3. Dans "Pistes disponibles", cliquez [+] pour envoyer une piste
---     dans le casque. Ou sélectionnez des pistes dans REAPER et cliquez
---     [+ Ajouter sélection REAPER].
---
---  4. Mixez dans la zone de droite :
---     - Fader vertical    : volume individuel (clic droit = reset / couper)
---     - Slider horizontal : panoramique (clic droit = centre)
---     - MUTE              : couper cette piste dans ce casque
---     - [x]               : retirer la piste du casque
---     - Master            : volume global du casque, indépendant des faders
---
---  SNAPSHOTS A / B
---  ───────────────
---  Chaque casque dispose de deux snapshots de mix.
---  Clic gauche : sauvegarde si vide, rappel si existant.
---  Clic droit  : sauvegarde toujours (écrase le snapshot existant).
---
---  COULEURS DES STRIPS
---  ────────────────────
---  Les strips reprennent automatiquement la couleur assignée
---  à chaque piste dans REAPER. Aucun réglage nécessaire.
---
---  VU-MÈTRES
---  ──────────
---  Chaque strip affiche un VU-mètre stéréo L/R, post-fader.
---  Bleu < -18 dBFS · Vert -18 à -12 · Jaune -12 à -6 · Orange -6 à 0 · Rouge > 0
---  Une barre rouge vive en haut signale un écrêtage récent (2 secondes).
---
---  REPAIR
---  ──────
---  Si quelque chose semble désynchronisé entre le script et REAPER,
---  cliquez [Repair] pour tout remettre en ordre automatiquement.
---
 -- =============================================================================
 
--- Vérification que ReaImGui est bien installé
 if not reaper.ImGui_CreateContext then
   reaper.MB(
     "ReaImGui n'est pas installé.\nInstallez-le via ReaPack puis relancez le script.",
@@ -65,7 +23,7 @@ end
 
 local CFG = {
   SCRIPT_NAME = "SK Cue Bus Manager",
-  VERSION     = "1.3",
+  VERSION     = "1.4",
   WINDOW_W    = 1200,
   WINDOW_H    = 640,
   SIDEBAR_W   = 200,
@@ -96,40 +54,49 @@ local CFG = {
     { label="Gris",   r=100, g=100, b=110 },
   },
 
+  -- Charte graphique Studio Kozak — accent ambre · fond chaud sombre · texte crème
   COL = {
-    BG          = 0x1A1A1EFF,
-    SIDEBAR_BG  = 0x141418FF,
-    TOPBAR_BG   = 0x0E0E12FF,
-    PANEL_BG    = 0x18181EFF,
-    STRIP_BG    = 0x222228FF,
-    STRIP_MUTED = 0x1C1420FF,
-    FADER_RAIL  = 0x2A2A36FF,
-    FADER_GRAB  = 0x5A8FE0FF,
-    FADER_MUTED = 0x804040FF,
-    MUTE_ON     = 0xC04040FF,
-    MUTE_OFF    = 0x363648FF,
-    ACCENT      = 0x5A8FE0FF,
-    ACCENT2     = 0x40C8A0FF,
-    DANGER      = 0xC03030FF,
-    TEXT_DIM    = 0x808090FF,
-    TEXT_BRIGHT = 0xE8E8F0FF,
-    TEXT_LABEL  = 0xAABBCCFF,
-    SEP         = 0x303040FF,
-    CUE_SEL     = 0x2E3D5AFF,
-    CUE_HOVER   = 0x242434FF,
-    STRIP_SEL   = 0x2A2A36FF,
-    SNAP_B      = 0xD4A020FF,
-    VU_BLUE     = 0x4080C0FF,
+    BG          = 0x1E2024FF,  -- fenêtre principale
+    SIDEBAR_BG  = 0x191B1FFF,  -- colonne des cues (plus sombre)
+    TOPBAR_BG   = 0x181A1EFF,  -- barre de titre
+    PANEL_BG    = 0x212429FF,  -- panneaux internes
+    STRIP_BG    = 0x2A2D33FF,  -- fond de strip / frame
+    STRIP_MUTED = 0x241F1BFF,  -- strip mute (chaud-sombre)
+    FADER_RAIL  = 0x232529FF,  -- rail de fader
+    FADER_GRAB  = 0xD9A441FF,  -- poignée de fader (ambre)
+    FADER_MUTED = 0x6E5A3AFF,  -- poignée mute (ambre éteint)
+    MUTE_ON     = 0xC0533FFF,  -- mute actif (rouge chaud)
+    MUTE_OFF    = 0x30343BFF,  -- mute inactif (bouton neutre)
+    ACCENT      = 0xD9A441FF,  -- ambre Studio Kozak
+    ACCENT_H    = 0xE6B75AFF,  -- ambre survol
+    ACCENT_A    = 0xB8863BFF,  -- ambre actif
+    ACCENT2     = 0xC79A3EFF,  -- or profond (états ON / secondaires)
+    ACCENT2_H   = 0xDDB055FF,  -- or profond survol
+    ACCENT2_A   = 0xA5822FFF,  -- or profond actif
+    INK         = 0x181A1FFF,  -- encre (texte foncé sur ambre)
+    DANGER      = 0xC0533FFF,  -- rouge chaud
+    DANGER_H    = 0xD46A4CFF,  -- rouge chaud survol
+    TEXT_DIM    = 0x8C8778FF,  -- texte atténué (olive-gris)
+    TEXT_BRIGHT = 0xE9E5DAFF,  -- texte principal (crème)
+    TEXT_LABEL  = 0xC9C3B4FF,  -- libellés (crème doux)
+    SEP         = 0x3A3E46FF,  -- séparateurs
+    CUE_SEL     = 0x40381FFF,  -- cue sélectionné (ambre-brun)
+    CUE_HOVER   = 0x2A2D33FF,  -- cue survolé
+    STRIP_SEL   = 0x3B404AFF,  -- bouton survolé (neutre)
+    SNAP_B      = 0xD4A020FF,  -- snapshot B (or)
+    TOGGLE_OFF     = 0x30343BFF,  -- toggle inactif
+    TOGGLE_OFF_HOV = 0x474D58FF,  -- toggle inactif survol
+    VU_BLUE     = 0x4080C0FF,  -- VU-mètre — convention de metering standard
     VU_GREEN    = 0x30C060FF,
     VU_YELLOW   = 0xD4C020FF,
     VU_ORANGE   = 0xE07020FF,
     VU_CLIP     = 0xC02020FF,
     VU_CLIP_IND = 0xFF2020FF,
-    VU_BG       = 0x141418FF,
-    ADD_BTN     = 0x284828FF,
-    ADD_HOV     = 0x3A6A3AFF,
-    REM_BTN     = 0x482828FF,
-    REM_HOV     = 0x6A3A3AFF,
+    VU_BG       = 0x17181BFF,
+    ADD_BTN     = 0x2C3A2AFF,  -- ajouter (vert atténué)
+    ADD_HOV     = 0x3D5238FF,
+    REM_BTN     = 0x3E2A24FF,  -- retirer (rouge atténué)
+    REM_HOV     = 0x5C3A2EFF,
   },
 }
 
@@ -189,12 +156,17 @@ end
 
 local function rgba(hex) return hex end
 
-local function colored_button(ctx, label, cn, ch, ca, w, h)
+local function colored_button(ctx, label, cn, ch, ca, w, h, tcol)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        cn)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), ch)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(),  ca)
+  local npush = 3
+  if tcol then
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), tcol)
+    npush = 4
+  end
   local clicked = reaper.ImGui_Button(ctx, label, w or 0, h or 0)
-  reaper.ImGui_PopStyleColor(ctx, 3)
+  reaper.ImGui_PopStyleColor(ctx, npush)
   return clicked
 end
 
@@ -210,6 +182,30 @@ local function get_hw_out_options()
   end
   return opts
 end
+
+-- =============================================================================
+--  POLICES
+--  Corps de texte + titre ambre (charte Studio Kozak).
+-- =============================================================================
+
+local FONT_BODY  = 13
+local FONT_TITLE = 18
+local fontBody   = reaper.ImGui_CreateFont("sans-serif", FONT_BODY)
+local fontTitle  = reaper.ImGui_CreateFont("sans-serif", FONT_TITLE)
+
+-- Pousse une police, en tolérant la différence de signature entre versions de ReaImGui.
+local _pf_mode
+local function PushFont(ctx, f, size)
+  if _pf_mode == 1 then
+    reaper.ImGui_PushFont(ctx, f, size)
+  elseif _pf_mode == 2 then
+    reaper.ImGui_PushFont(ctx, f)
+  else
+    if pcall(reaper.ImGui_PushFont, ctx, f, size) then _pf_mode = 1
+    else reaper.ImGui_PushFont(ctx, f); _pf_mode = 2 end
+  end
+end
+local function PopFont(ctx) reaper.ImGui_PopFont(ctx) end
 
 -- =============================================================================
 --  MODÈLE DE PROJET
@@ -811,10 +807,8 @@ end
 
 -- =============================================================================
 --  VU-MÈTRE
---  Affichage stéréo L/R avec 5 zones de couleur.
---  Lit le signal post-fader de la piste source.
---  Le volume, le panoramique et le mute du send sont appliqués.
---  Prend en compte le volume, le panoramique et le mute du send.
+--  Affichage stéréo L/R avec 5 zones de couleur. Lit le signal post-fader de la
+--  piste source ; le volume, le panoramique et le mute du send sont appliqués.
 --  Un indicateur rouge en haut signale un écrêtage récent (2 secondes).
 -- =============================================================================
 
@@ -915,7 +909,7 @@ local function draw_vu_meter(ctx, track, h, vol, pan, muted, src_guid)
   draw_channel(cx + CFG.VU_W + CFG.VU_GAP, peak_r)
 
   local y_0db = bar_y0 + math.floor((1 - db_to_frac(0)) * bar_area)
-  reaper.ImGui_DrawList_AddLine(dl, cx, y_0db, cx+total_w, y_0db, rgba(0x80808060), 1)
+  reaper.ImGui_DrawList_AddLine(dl, cx, y_0db, cx+total_w, y_0db, rgba(0x8C877880), 1)
 
   reaper.ImGui_Dummy(ctx, total_w, h)
 end
@@ -929,14 +923,18 @@ local function draw_topbar(ctx, cue_mgr, model)
   if reaper.ImGui_BeginChild(ctx, "topbar", 0, CFG.TOPBAR_H, 0,
       reaper.ImGui_WindowFlags_NoScrollbar()) then
 
-    reaper.ImGui_SetCursorPosY(ctx, 7)
+    reaper.ImGui_SetCursorPosY(ctx, 9)
     reaper.ImGui_SetCursorPosX(ctx, 8)
+    PushFont(ctx, fontTitle, FONT_TITLE)
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.ACCENT))
-    reaper.ImGui_Text(ctx, "SK CUE BUS MANAGER  v"..CFG.VERSION)
+    reaper.ImGui_Text(ctx, "SK CUE BUS MANAGER")
     reaper.ImGui_PopStyleColor(ctx, 1)
+    PopFont(ctx)
     reaper.ImGui_SameLine(ctx, 0, 20)
+    reaper.ImGui_SetCursorPosY(ctx, 9)
 
-    if colored_button(ctx, "+ Nouveau Cue", CFG.COL.ACCENT, 0x7AAFFFFF, 0x3A6FC0FF) then
+    if colored_button(ctx, "+ Nouveau Cue", CFG.COL.ACCENT, CFG.COL.ACCENT_H, CFG.COL.ACCENT_A,
+        0, 0, CFG.COL.INK) then
       UI.show_new_dlg = true
     end
     reaper.ImGui_SameLine(ctx, 0, 4)
@@ -976,8 +974,8 @@ local function draw_topbar(ctx, cue_mgr, model)
         any_muted = true; break
       end
     end
-    local ma_col = any_muted and CFG.COL.MUTE_ON  or CFG.COL.MUTE_OFF
-    local ma_hov = any_muted and 0xD05050FF        or 0x505068FF
+    local ma_col = any_muted and CFG.COL.MUTE_ON   or CFG.COL.MUTE_OFF
+    local ma_hov = any_muted and CFG.COL.DANGER_H  or CFG.COL.TOGGLE_OFF_HOV
     local ma_lbl = any_muted and "TOUT ROUVRIR"      or "TOUT COUPER"
     if colored_button(ctx, ma_lbl, ma_col, ma_hov, CFG.COL.MUTE_ON) then
       local new_state = not any_muted
@@ -997,8 +995,8 @@ local function draw_topbar(ctx, cue_mgr, model)
     -- Bouton Pre-fader metering (action 42076)
     reaper.ImGui_SameLine(ctx, 0, 14)
     local pre_fader_on = reaper.GetToggleCommandState(42076) == 1
-    local pf_col = pre_fader_on and CFG.COL.ACCENT2 or CFG.COL.MUTE_OFF
-    local pf_hov = pre_fader_on and 0x50D0A0FF   or 0x505068FF
+    local pf_col = pre_fader_on and CFG.COL.ACCENT2   or CFG.COL.MUTE_OFF
+    local pf_hov = pre_fader_on and CFG.COL.ACCENT2_H or CFG.COL.TOGGLE_OFF_HOV
     if colored_button(ctx, "VU PRE FDR", pf_col, pf_hov, CFG.COL.ACCENT2) then
       reaper.Main_OnCommand(42076, 0)
     end
@@ -1010,8 +1008,8 @@ local function draw_topbar(ctx, cue_mgr, model)
     end
     reaper.ImGui_SameLine(ctx, 0, 4)
     -- Bouton largeur des strips + saisie largeur personnalisée
-    local sw_col = UI.strip_wide and CFG.COL.ACCENT2 or CFG.COL.MUTE_OFF
-    local sw_hov = UI.strip_wide and 0x50D0A0FF   or 0x505068FF
+    local sw_col = UI.strip_wide and CFG.COL.ACCENT2   or CFG.COL.MUTE_OFF
+    local sw_hov = UI.strip_wide and CFG.COL.ACCENT2_H or CFG.COL.TOGGLE_OFF_HOV
     if colored_button(ctx, UI.strip_wide and "LARGE" or "large",
         sw_col, sw_hov, CFG.COL.ACCENT2) then
       UI.strip_wide = not UI.strip_wide
@@ -1046,7 +1044,7 @@ local function draw_topbar(ctx, cue_mgr, model)
     if elapsed < 3.0 and UI.status_msg ~= "" then
       reaper.ImGui_SameLine(ctx, 0, 16)
       local a = math.floor(clamp(1 - elapsed/3, 0, 1) * 255)
-      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), (a << 24) | 0x40C8A0)
+      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), (a << 24) | 0xD9A441)
       reaper.ImGui_Text(ctx, "✓ "..UI.status_msg)
       reaper.ImGui_PopStyleColor(ctx, 1)
     end
@@ -1094,11 +1092,11 @@ local function draw_sidebar(ctx, cue_mgr, model)
         reaper.ImGui_SameLine(ctx, 0, 4)
       end
 
-      -- Fond plus marqué pour le cue actif, bordure gauche colorée
+      -- Fond plus marqué pour le cue actif
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Header(),
-        is_sel and rgba(0x3A5080FF) or rgba(0))
+        is_sel and rgba(CFG.COL.CUE_SEL) or rgba(0))
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_HeaderHovered(), rgba(CFG.COL.CUE_HOVER))
-      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_HeaderActive(),  rgba(0x3A5080FF))
+      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_HeaderActive(),  rgba(CFG.COL.CUE_SEL))
 
       if is_ren then
         reaper.ImGui_SetNextItemWidth(ctx, CFG.SIDEBAR_W - 46)
@@ -1132,7 +1130,7 @@ local function draw_sidebar(ctx, cue_mgr, model)
         local sb_master = get_cue_master(cue.guid)
         reaper.ImGui_SameLine(ctx, 0, 4)
         local smc = sb_master.muted and CFG.COL.MUTE_ON or CFG.COL.MUTE_OFF
-        local smh = sb_master.muted and 0xD05050FF or 0x404050FF
+        local smh = sb_master.muted and CFG.COL.DANGER_H or CFG.COL.MUTE_OFF
         if colored_button(ctx, (sb_master.muted and "M" or "m").."##sbm"..cue.guid,
             smc, smh, CFG.COL.MUTE_ON, 20, 20) then
           sb_master.muted = not sb_master.muted
@@ -1159,7 +1157,7 @@ end
 -- =============================================================================
 
 local function draw_cue_header(ctx, cue, cue_mgr, snap, model)
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ChildBg(), rgba(0x1C1C24FF))
+  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ChildBg(), rgba(0x22252AFF))
   if reaper.ImGui_BeginChild(ctx, "cue_hdr", 0, 50, 0,
       reaper.ImGui_WindowFlags_NoScrollbar()) then
 
@@ -1264,8 +1262,11 @@ local function draw_cue_header(ctx, cue, cue_mgr, snap, model)
     -- Sortie hardware assignée
     local hw_lbl = cue.hw_l >= 0
       and ("Out "..(cue.hw_l+1).."/"..(cue.hw_l+2)) or "Pas de sortie HW"
-    local hw_col = cue.hw_l >= 0 and CFG.COL.ACCENT2 or 0x505060FF
-    if colored_button(ctx, " "..hw_lbl.." ##hw", hw_col, 0x50D0A0FF, 0x30A080FF) then
+    local hw_on  = cue.hw_l >= 0
+    local hw_col = hw_on and CFG.COL.ACCENT2 or CFG.COL.TOGGLE_OFF
+    local hw_txt = hw_on and CFG.COL.INK    or nil
+    if colored_button(ctx, " "..hw_lbl.." ##hw", hw_col, CFG.COL.ACCENT2_H, CFG.COL.ACCENT2_A,
+        0, 0, hw_txt) then
       UI.hw_out_dlg = true
       UI.hw_out_cue = cue.guid
       UI.hw_ch_sel  = math.max(0, cue.hw_l)
@@ -1297,7 +1298,7 @@ local function draw_cue_header(ctx, cue, cue_mgr, snap, model)
     local has_a = snap:has(cue.guid, "A")
     if colored_button(ctx, has_a and "> A" or "@ A",
         has_a and CFG.COL.ACCENT or CFG.COL.STRIP_BG,
-        CFG.COL.STRIP_SEL, CFG.COL.ACCENT) then
+        CFG.COL.STRIP_SEL, CFG.COL.ACCENT, 0, 0, has_a and CFG.COL.INK or nil) then
       if has_a then snap:recall(cue.guid, "A"); set_status("Snapshot A rappelé.")
       else           snap:save(cue.guid, "A");  set_status("Snapshot A sauvegardé.") end
     end
@@ -1313,7 +1314,7 @@ local function draw_cue_header(ctx, cue, cue_mgr, snap, model)
     local has_b = snap:has(cue.guid, "B")
     if colored_button(ctx, has_b and "> B" or "@ B",
         has_b and CFG.COL.SNAP_B or CFG.COL.STRIP_BG,
-        CFG.COL.STRIP_SEL, CFG.COL.SNAP_B) then
+        CFG.COL.STRIP_SEL, CFG.COL.SNAP_B, 0, 0, has_b and CFG.COL.INK or nil) then
       if has_b then snap:recall(cue.guid, "B"); set_status("Snapshot B rappelé.")
       else           snap:save(cue.guid, "B");  set_status("Snapshot B sauvegardé.") end
     end
@@ -1373,8 +1374,7 @@ local function draw_fader_strip(ctx, cue_guid, src, routing, fader_h, on_remove)
 
     -- Bouton retrait + nom de la piste
     local name = src.name
-    -- Troncature dynamique selon la largeur du strip
-    -- ~7px par caractère en police par défaut, 19px réservés pour [x] + marge
+    -- Tronque le nom à la largeur disponible du strip
     local max_chars = math.max(4, math.floor((strip_w() - 22) / 7))
     if #name > max_chars then name = name:sub(1, max_chars - 1).."~" end
     if on_remove then
@@ -1425,9 +1425,9 @@ local function draw_fader_strip(ctx, cue_guid, src, routing, fader_h, on_remove)
 
     -- Panoramique
     reaper.ImGui_Spacing(ctx)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(),         rgba(0x141418FF))
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(),  rgba(0x1E1E24FF))
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_SliderGrab(),      rgba(0xFFFFFFFF))
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(),         rgba(0x202329FF))
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(),  rgba(0x2A2D33FF))
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_SliderGrab(),      rgba(CFG.COL.TEXT_BRIGHT))
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_SliderGrabActive(),rgba(CFG.COL.ACCENT2))
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_GrabMinSize(), 10)
     reaper.ImGui_SetNextItemWidth(ctx, strip_w() - 6)
@@ -1451,8 +1451,8 @@ local function draw_fader_strip(ctx, cue_guid, src, routing, fader_h, on_remove)
 
     -- Bouton Mute
     reaper.ImGui_Spacing(ctx)
-    local mc = muted and CFG.COL.MUTE_ON or CFG.COL.MUTE_OFF
-    local mh = muted and 0xD05050FF or 0x505068FF
+    local mc = muted and CFG.COL.MUTE_ON  or CFG.COL.MUTE_OFF
+    local mh = muted and CFG.COL.DANGER_H or CFG.COL.TOGGLE_OFF_HOV
     if colored_button(ctx, muted and "MUTE" or "mute", mc, mh, CFG.COL.MUTE_ON,
         strip_w() - 6, 22) then
       routing:set_mute(cue_guid, src, not muted)
@@ -1541,7 +1541,7 @@ local function draw_main_zone(ctx, cue, cue_mgr, routing, snap, model)
       -- Barre de contrôle globale du casque
       local master = get_cue_master(cue.guid)
       local mc = master.muted and CFG.COL.MUTE_ON or CFG.COL.MUTE_OFF
-      local mh = master.muted and 0xD05050FF or 0x505068FF
+      local mh = master.muted and CFG.COL.DANGER_H or CFG.COL.TOGGLE_OFF_HOV
       if colored_button(ctx, master.muted and "CUE COUPÉ" or "cue coupé",
           mc, mh, CFG.COL.MUTE_ON, 70, CFG.MASTER_H) then
         master.muted = not master.muted
@@ -1616,9 +1616,11 @@ local function draw_welcome(ctx)
   if reaper.ImGui_BeginChild(ctx, "welcome", w, h, 0) then
     reaper.ImGui_Spacing(ctx)
     reaper.ImGui_SetCursorPosX(ctx, 20)
+    PushFont(ctx, fontTitle, FONT_TITLE)
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.ACCENT))
-    reaper.ImGui_Text(ctx, "Bienvenue dans SK Cue Bus Manager v"..CFG.VERSION)
+    reaper.ImGui_Text(ctx, "MONITORING CASQUES")
     reaper.ImGui_PopStyleColor(ctx, 1)
+    PopFont(ctx)
     reaper.ImGui_Spacing(ctx)
     reaper.ImGui_Separator(ctx)
     reaper.ImGui_Spacing(ctx)
@@ -1699,9 +1701,9 @@ local function draw_new_cue_dialog(ctx, cue_mgr, model, routing)
   local amt    = UI.new_pastel_amt / 100.0
   local no_col = UI.new_col_r == -1
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),
-    no_col and rgba(0x404050FF) or rgba(CFG.COL.STRIP_BG))
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), rgba(0x505060FF))
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(),  rgba(0x505060FF))
+    no_col and rgba(CFG.COL.MUTE_OFF) or rgba(CFG.COL.STRIP_BG))
+  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), rgba(CFG.COL.TOGGLE_OFF_HOV))
+  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(),  rgba(CFG.COL.TOGGLE_OFF_HOV))
   if reaper.ImGui_Button(ctx, no_col and "x##nc" or " ##nc", 24, 24) then
     UI.new_col_r = -1; UI.new_col_g = -1; UI.new_col_b = -1
   end
@@ -1756,7 +1758,8 @@ local function draw_new_cue_dialog(ctx, cue_mgr, model, routing)
 
   reaper.ImGui_Spacing(ctx)
 
-  if colored_button(ctx, " Créer ", CFG.COL.ACCENT, 0x7AAFFFFF, 0x3A6FC0FF, 120, 28) then
+  if colored_button(ctx, " Créer ", CFG.COL.ACCENT, CFG.COL.ACCENT_H, CFG.COL.ACCENT_A,
+      120, 28, CFG.COL.INK) then
     if UI.new_name_buf ~= "" then
       local g   = cue_mgr:create_cue_bus(UI.new_name_buf)
       local cue = model.cue_buses[g]
@@ -1834,7 +1837,8 @@ local function draw_hw_out_dialog(ctx, routing, model)
       reaper.ImGui_EndCombo(ctx)
     end
     reaper.ImGui_Spacing(ctx)
-    if colored_button(ctx, " Appliquer ", CFG.COL.ACCENT2, 0x50D0A0FF, 0x30A080FF, 110, 26) then
+    if colored_button(ctx, " Appliquer ", CFG.COL.ACCENT2, CFG.COL.ACCENT2_H, CFG.COL.ACCENT2_A,
+        110, 26, CFG.COL.INK) then
       local ch = UI.hw_ch_sel == 0 and -1 or (UI.hw_ch_sel-1)*2
       routing:set_hw_out(UI.hw_out_cue, ch)
       local cue = model.cue_buses[UI.hw_out_cue]
@@ -1855,22 +1859,45 @@ end
 --  STYLE GLOBAL DE L'INTERFACE
 -- =============================================================================
 
+-- Charte Studio Kozak poussée globalement pour que les widgets natifs
+-- (combos, champs, sliders, cases à cocher, popups) héritent du style maison.
+local THEME_COLORS = {
+  { reaper.ImGui_Col_WindowBg(),         CFG.COL.BG          },
+  { reaper.ImGui_Col_PopupBg(),          0x24272CFF          },
+  { reaper.ImGui_Col_Text(),             CFG.COL.TEXT_BRIGHT },
+  { reaper.ImGui_Col_TextDisabled(),     CFG.COL.TEXT_DIM    },
+  { reaper.ImGui_Col_FrameBg(),          0x2A2D33FF          },
+  { reaper.ImGui_Col_FrameBgHovered(),   0x353942FF          },
+  { reaper.ImGui_Col_FrameBgActive(),    0x3E434DFF          },
+  { reaper.ImGui_Col_Button(),           CFG.COL.MUTE_OFF    },
+  { reaper.ImGui_Col_ButtonHovered(),    CFG.COL.STRIP_SEL   },
+  { reaper.ImGui_Col_ButtonActive(),     0x474D58FF          },
+  { reaper.ImGui_Col_CheckMark(),        CFG.COL.ACCENT      },
+  { reaper.ImGui_Col_SliderGrab(),       CFG.COL.ACCENT      },
+  { reaper.ImGui_Col_SliderGrabActive(), CFG.COL.ACCENT_H    },
+  { reaper.ImGui_Col_Header(),           0x33373FFF          },
+  { reaper.ImGui_Col_HeaderHovered(),    0x3F444EFF          },
+  { reaper.ImGui_Col_HeaderActive(),     0x4A505BFF          },
+  { reaper.ImGui_Col_Separator(),        CFG.COL.SEP         },
+  { reaper.ImGui_Col_Border(),           0x35393FFF          },
+  { reaper.ImGui_Col_TitleBg(),          CFG.COL.TOPBAR_BG   },
+  { reaper.ImGui_Col_TitleBgActive(),    0x24272CFF          },
+  { reaper.ImGui_Col_ScrollbarBg(),      CFG.COL.SIDEBAR_BG  },
+  { reaper.ImGui_Col_ScrollbarGrab(),    0x474D58FF          },
+}
+
 local function push_style(ctx)
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_WindowBg(),      rgba(CFG.COL.BG))
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_TitleBg(),       rgba(0x0E0E12FF))
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_TitleBgActive(), rgba(0x18182AFF))
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Border(),        rgba(CFG.COL.SEP))
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Separator(),     rgba(CFG.COL.SEP))
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),          rgba(CFG.COL.TEXT_BRIGHT))
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ScrollbarBg(),   rgba(0x12121AFF))
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ScrollbarGrab(), rgba(0x404058FF))
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(),       rgba(0x1A1A26FF))
-  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 4)
-  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ChildRounding(),  4)
-  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(),  3)
+  for _, c in ipairs(THEME_COLORS) do
+    reaper.ImGui_PushStyleColor(ctx, c[1], rgba(c[2]))
+  end
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 6)
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ChildRounding(),  6)
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(),  5)
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_GrabRounding(),   5)
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_PopupRounding(),  6)
   reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(),    4, 4)
   reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(),  6, 6)
-  return 9, 5
+  return #THEME_COLORS, 7
 end
 
 local function pop_style(ctx, nc, nv)
@@ -1882,9 +1909,9 @@ end
 --  INITIALISATION ET BOUCLE PRINCIPALE
 -- =============================================================================
 
-local ctx  = reaper.ImGui_CreateContext(CFG.SCRIPT_NAME)
-local font = reaper.ImGui_CreateFont("sans-serif", 13)
-reaper.ImGui_Attach(ctx, font)
+local ctx = reaper.ImGui_CreateContext(CFG.SCRIPT_NAME)
+reaper.ImGui_Attach(ctx, fontBody)
+reaper.ImGui_Attach(ctx, fontTitle)
 
 local model        = ProjectModel.new()
 local routing      = RoutingEngine.new(model)
@@ -1923,9 +1950,10 @@ local function loop()
   end
 
   local nc, nv = push_style(ctx)
+  PushFont(ctx, fontBody, FONT_BODY)
   reaper.ImGui_SetNextWindowSize(ctx, CFG.WINDOW_W, CFG.WINDOW_H, reaper.ImGui_Cond_FirstUseEver())
   local visible, keep = reaper.ImGui_Begin(ctx,
-    CFG.SCRIPT_NAME.." v"..CFG.VERSION, true,
+    CFG.SCRIPT_NAME, true,
     reaper.ImGui_WindowFlags_NoScrollbar() |
     reaper.ImGui_WindowFlags_NoScrollWithMouse())
   if not keep then open = false end
@@ -1961,11 +1989,12 @@ local function loop()
     reaper.ImGui_End(ctx)
   end
 
-  pop_style(ctx, nc, nv)
-
   draw_new_cue_dialog(ctx, cue_mgr, model, routing)
   draw_copy_from_dialog(ctx, cue_mgr, model)
   draw_hw_out_dialog(ctx, routing, model)
+
+  PopFont(ctx)
+  pop_style(ctx, nc, nv)
 
   if open then reaper.defer(loop) end
 end
