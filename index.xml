@@ -69,6 +69,13 @@ The pattern being worked on is kept with the project, so closing the window no l
       </version>
     </reapack>
   </category>
+  <category name="FX/Phase">
+    <reapack name="SK W2324 Phase Shifter" type="effect" desc="SK W2324 Phase Shifter : Frequency-selective phase shifter (Roger Schult W2324 emulation)">
+      <version name="1.0" author="Studio Kozak" time="2026-07-28T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Effects/SK%20W2324%20Phase%20Shifter</source>
+      </version>
+    </reapack>
+  </category>
   <category name="Tools">
     <reapack name="SK Cue Bus Manager_FR.lua" type="script" desc="SK Cue Bus Manager : Headphone monitoring console with VU-meters and routing (FR)">
       <version name="1.4" author="Studio Kozak" time="2026-07-27T00:00:00Z">
