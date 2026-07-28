@@ -1,0 +1,96 @@
+desc:SK W2324 Phase Shifter
+// =============================================================================
+// Studio Kozak — SK W2324 Phase Shifter  v1.0
+// Emulation of the Roger Schult W2324 (api 500) phase shifter: shifts the phase
+// of the signal around a selected frequency, without changing its level.
+//
+// CONTROLS:
+//   Level        Output trim, +/-5 dB (41 steps of 0.25 dB, as on the hardware).
+//   Phase        Amount of phase shift applied at the selected frequency.
+//   Phase Range  10-125 deg  /  Bypass (compare with the dry signal)  /
+//                +180 deg, which inverts polarity to reach the 190-305 deg range.
+//   Frequency    The frequency the phase shift is centred on (11 positions).
+// =============================================================================
+
+in_pin:Input L
+in_pin:Input R
+out_pin:Output L
+out_pin:Output R
+
+slider1:0<-5,5,0.25>Level (dB)
+slider2:90<10,125,0.1>Phase (deg @ f0)
+slider3:0<0,2,1{10 deg - 125 deg,Bypass (compare),+180 deg (190-305 deg)}>Phase Range
+slider4:5<1,11,1{23 Hz,36 Hz,48 Hz,73 Hz,170 Hz,230 Hz,338 Hz,470 Hz,730 Hz,1 kHz,1.57 kHz}>Frequency
+
+@init
+srate_inv = 1.0 / srate;
+deg2rad   = $pi / 180.0;
+
+// Tiny sign-flipping offset to keep the filter out of denormals during silence.
+sk_dn = 0.00000000000000001;
+
+// Parameter smoothing (~5 ms) so control moves stay click-free.
+sk_sm = 1.0 - exp(-1.0 / (0.005 * srate));
+
+// The 11 selectable frequencies (Hz).
+sk_freq = 1000;
+sk_freq[0]  = 23;
+sk_freq[1]  = 36;
+sk_freq[2]  = 48;
+sk_freq[3]  = 73;
+sk_freq[4]  = 170;
+sk_freq[5]  = 230;
+sk_freq[6]  = 338;
+sk_freq[7]  = 470;
+sk_freq[8]  = 730;
+sk_freq[9]  = 1000;
+sk_freq[10] = 1570;
+
+sk_gain = 1.0;
+sk_a1   = 0.0;
+
+@slider
+// Output level (linear).
+sk_gain_mag = pow(10.0, slider1 / 20.0);
+
+// Selected frequency.
+sk_f0 = sk_freq[slider4 - 1];
+sk_t0 = tan($pi * sk_f0 * srate_inv);
+
+slider3 == 1 ? (
+  // Bypass: phase network out, level still applied so the A/B stays level-matched.
+  sk_bypass = 1;
+  sk_a1_t   = sk_a1;
+  sk_gain_t = sk_gain_mag;
+) : (
+  // Phase shift set by the pot, centred on the selected frequency.
+  // The +180 range adds a polarity inversion (negative gain).
+  sk_bypass = 0;
+  sk_theta  = slider2;
+  sk_tt     = sk_t0 / tan(sk_theta * 0.5 * deg2rad);
+  sk_a1_t   = (sk_tt - 1.0) / (sk_tt + 1.0);
+  sk_gain_t = (slider3 == 2 ? -sk_gain_mag : sk_gain_mag);
+);
+
+@sample
+sk_gain += (sk_gain_t - sk_gain) * sk_sm;
+sk_a1   += (sk_a1_t   - sk_a1)   * sk_sm;
+sk_dn = -sk_dn;
+
+sk_bypass ? (
+  spl0 *= sk_gain;
+  spl1 *= sk_gain;
+) : (
+  // Left channel
+  sp_xL = spl0 + sk_dn;
+  sp_yL = sk_a1 * sp_xL + s1x_L - sk_a1 * s1y_L;
+  s1x_L = sp_xL; s1y_L = sp_yL;
+  spl0  = sp_yL * sk_gain;
+
+  // Right channel
+  sp_xR = spl1 + sk_dn;
+  sp_yR = sk_a1 * sp_xR + s1x_R - sk_a1 * s1y_R;
+  s1x_R = sp_xR; s1y_R = sp_yR;
+  spl1  = sp_yR * sk_gain;
+);
+
