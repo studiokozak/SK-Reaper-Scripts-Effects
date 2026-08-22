@@ -101,6 +101,10 @@ The pattern being worked on is kept with the project, so closing the window no l
       </version>
     </reapack>
     <reapack name="SK Routing Hub.lua" type="script" desc="SK Routing Hub : Comprehensive routing management tool">
+      <version name="2.0" author="Studio Kozak" time="2026-08-22T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Routing%20Hub.lua</source>
+        <changelog><![CDATA[Reworked interface. New RECEIVES section with a + New receive button to route other tracks into the selected ones in one step.]]></changelog>
+      </version>
       <version name="1.2" author="Studio Kozak" time="2026-04-16T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Routing%20Hub.lua</source>
       </version>
