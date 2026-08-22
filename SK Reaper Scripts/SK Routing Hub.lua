@@ -1,13 +1,13 @@
 -- =============================================================================
---  SK Routing Hub v1.1
+--  SK Routing Hub
 --  Studio Kozak — Stéphan JEDRASIAK
 -- =============================================================================
 
-local SCRIPT_NAME = "SK Routing Hub v1.2"
+local SCRIPT_NAME = "SK Routing Hub"
 local WIN_W, WIN_H = 960, 720
 local COL_LEFT_W   = 290
 
--- I_SENDMODE : 0=Post-Fader(Post-Pan)  3=Pre-Fader(Post-FX)  1=Pre-Fader(Pre-FX)
+-- Les trois modes d'envoi proposés, et leur ordre dans les menus déroulants.
 local SM_LABELS = { "Post-Fader (Post-Pan)", "Pre-Fader (Post-FX)", "Pre-Fader (Pre-FX)" }
 local SM_VALS   = { 0, 3, 1 }
 local function sm_to_idx(v)
@@ -16,6 +16,7 @@ local function sm_to_idx(v)
   return 1
 end
 
+-- Conversion entre "paire de canaux" affichée (1-2, 3-4, ...) et sa valeur interne.
 local function enc_srcchan(pair_1based)
   return (pair_1based - 1) * 2
 end
@@ -26,26 +27,26 @@ local function dec_srcchan(raw)
   return pair
 end
 
--- I_DSTCHAN : premier canal destination (0-based)
 local function enc_dstchan(pair_1based) return (pair_1based - 1) * 2 end
 local function dec_dstchan(raw) return math.floor(math.floor(raw) / 2) + 1 end
 
 local MAX_PAIRS = 64
 
+-- Construit la liste des paires de canaux pour les menus déroulants.
 local function pairs_combo_str()
   local t = {}
   for i = 1, MAX_PAIRS do t[#t+1] = string.format("%d-%d", (i-1)*2+1, (i-1)*2+2) end
   return table.concat(t, "\0") .. "\0"
 end
 
-local PAIRS_STR = pairs_combo_str()  -- pré-calculé une fois
+local PAIRS_STR = pairs_combo_str()
 local SM_STR    = table.concat(SM_LABELS, "\0") .. "\0"
 
 -- ============================================================
 --  CONTEXTE IMGUI
 -- ============================================================
 local ctx  = reaper.ImGui_CreateContext(SCRIPT_NAME)
-local font = reaper.ImGui_CreateFont("sans-serif", 13)
+local font = reaper.ImGui_CreateFont("sans-serif", 14)
 reaper.ImGui_Attach(ctx, font)
 
 -- ============================================================
@@ -66,7 +67,6 @@ local C = {
   send_col   = 0x3A7A5AFF,
   recv_col   = 0x5A4A8AFF,
   vca_col    = 0x8A6A2AFF,
-  folder_col = 0x5A3A2AFF,
   danger     = 0x8A2A2AFF,
   danger_hov = 0xAA3A3AFF,
   mute_on    = 0x9A6A00FF,
@@ -77,52 +77,49 @@ local C = {
   sep        = 0x2E2E2EFF,
   new_trk    = 0x2A5A2AFF,
   new_trk_h  = 0x3A7A3AFF,
-  chk_dst    = 0x3A6A3AFF,  -- destination cochée
 }
 
 -- ============================================================
 --  ÉTAT
 -- ============================================================
 local state = {
-  sel_tracks      = {},
-  focused_track   = nil,   -- track active dans colonne gauche
+  sel_tracks      = {},    -- pistes actuellement sélectionnées
+  focused_track   = nil,   -- piste active dans la colonne de gauche
   last_sel_count  = -1,
   last_proj_state = -1,
   status_msg      = "",
   status_timer    = 0,
-  confirm_delete  = nil,   -- { track_ptr, name } en attente de confirmation
-  bulk_edit_sends  = false,  -- edition en masse SENDS
-  bulk_edit_recvs  = false,  -- edition en masse RECEIVES
-  cp_pastel        = 0.0,    -- slider pastel color picker (0=pur, 1=blanc)
-  cp_open          = false,  -- ouvrir color picker pistes
-  pending_delete   = nil,   -- suppression à exécuter au prochain début de frame
-  pending_deletes  = nil,   -- liste de suppressions multiples
-  pre_delete_sel   = {},    -- sélection avant suppression
-  new_track_name  = "",     -- masque de nom (ex: "TRACK")
-  new_track_color   = 0,     -- couleur des pistes créées
+  confirm_delete  = nil,   -- suppression de piste en attente de confirmation
+  bulk_edit_sends  = false,  -- édition groupée des sends activée
+  bulk_edit_recvs  = false,  -- édition groupée des receives activée
+  cp_pastel        = 0.0,    -- éclaircissement du sélecteur de couleur
+  cp_open          = false,  -- ouverture du sélecteur de couleur des pistes
+  pending_delete   = nil,    -- suppression de piste à exécuter juste après
+  pending_deletes  = nil,    -- suppressions multiples en attente
+  new_track_name  = "",      -- nom de base des nouvelles pistes
+  new_track_color   = 0,     -- couleur des nouvelles pistes
   new_track_cp_pastel = 0.3,
-  rename_track_ptr  = nil,   -- pointeur piste en cours de renommage
-  rename_just_opened = false,  -- flag pour focus au premier frame
-  rename_track_buf  = "",    -- buffer InputText renommage
-  folder_name_buf   = "",    -- buffer nom nouveau folder
-  folder_color      = 0,     -- couleur du folder
+  rename_track_ptr  = nil,   -- piste en cours de renommage
+  rename_just_opened = false,
+  rename_track_buf  = "",    -- saisie du nouveau nom
+  folder_name_buf   = "",    -- nom du nouveau dossier
+  folder_color      = 0,
   folder_cp_pastel  = 0.3,
-  bus_name_buf      = "",    -- buffer nom nouveau bus
-  bus_color         = 0,     -- couleur du bus
+  bus_name_buf      = "",    -- nom du nouveau bus
+  bus_color         = 0,
   bus_cp_pastel     = 0.3,
-  fx_name_buf       = "",    -- buffer nom nouvelle piste FX
-  fx_color          = 0,     -- couleur de la piste FX
+  fx_name_buf       = "",    -- nom de la nouvelle piste FX
+  fx_color          = 0,
   fx_cp_pastel      = 0.3,
-  vca_name_buf      = "",    -- buffer nom groupe VCA
-  vca_color         = 0,     -- couleur choisie pour le VCA (reaper format)
-  vca_mute_lead     = false, -- option Mute Lead
-  vca_solo_lead     = false, -- option Solo Lead
-  vca_cp_pastel     = 0.3,   -- slider pastel du color picker VCA
-  nchan_buf         = 2,     -- buffer nombre de canaux
-  ctx_menu_track    = nil,   -- piste visée par le menu contextuel
-  new_track_count = 1,      -- nombre de pistes à créer
-  -- Paramètres persistants de création de send
-  new_send_count = 1,    -- nombre de sends à créer par destination
+  vca_name_buf      = "",    -- nom du nouveau groupe VCA
+  vca_color         = 0,
+  vca_mute_lead     = false, -- le VCA coupe aussi le mute des pistes esclaves
+  vca_solo_lead     = false, -- le VCA pilote aussi le solo des pistes esclaves
+  vca_cp_pastel     = 0.3,
+  nchan_buf         = 2,     -- nombre de canaux saisi dans le menu de piste
+  new_track_count = 1,       -- nombre de pistes à créer
+  new_send_count = 1,        -- nombre de sends/receives à créer par piste cochée
+  -- Réglages du prochain send/receive à créer (conservés d'un popup à l'autre)
   np = {
     mode_idx  = 1,
     mono      = false,
@@ -130,10 +127,9 @@ local state = {
     mute      = false,
     src_pair  = 1,
     dst_pair  = 1,
-    main_send = false,  -- false = master actif (case cochee = master coupe)
+    main_send = false,  -- true = l'envoi au master de la source est coupé
   },
-  -- Multi-destinations sélectionnées dans popup
-  dest_checked = {},  -- [track_ptr] = true/false
+  dest_checked = {},   -- pistes cochées dans le popup de création
 }
 
 -- ============================================================
@@ -199,11 +195,11 @@ local function read_send(track, cat, idx)
   local sp = dec_srcchan(raw_src)
   local dp = dec_dstchan(raw_dst)
   local mono = reaper.GetTrackSendInfo_Value(track, cat, idx, "B_MONO") == 1
-  -- B_MAINSEND est une propriete de la piste source (pas du send)
+  -- L'envoi au master appartient à la piste qui émet, pas au send lui-même.
   local src_track_ref = cat == 0 and track or reaper.GetTrackSendInfo_Value(track, cat, idx, "P_SRCTRACK")
   local main_send = true
   if src_track_ref and reaper.ValidatePtr(src_track_ref, "MediaTrack*") then
-    -- main_send = true signifie "master COUPE" (inverse de B_MAINSEND)
+    -- Vrai lorsque l'envoi au master de cette piste est coupé.
     main_send = reaper.GetMediaTrackInfo_Value(src_track_ref, "B_MAINSEND") == 0
   end
   return {
@@ -251,7 +247,7 @@ local function apply_np(src_track, dst_track, send_idx, np, cat)
 
   ensure_chans(src_track, np.src_pair * 2)
 
-  -- Restaurer les I_SRCCHAN des sends existants (sauf le nouveau send_idx)
+  -- Rétablit les canaux des envois déjà présents, sauf celui qu'on vient d'ajouter.
   for i = 0, ns - 1 do
     if i ~= send_idx then
       reaper.SetTrackSendInfo_Value(src_track, 0, i, "I_SRCCHAN", saved_srcchan[i])
@@ -270,7 +266,8 @@ local function apply_np(src_track, dst_track, send_idx, np, cat)
   end
 end
 
-local function action_create_sends(src_tracks, dst_tracks, np)
+local function action_create_sends(src_tracks, dst_tracks, np, noun)
+  noun = noun or "send"
   reaper.Undo_BeginBlock()
   reaper.PreventUIRefresh(1)
   local count = 0
@@ -290,7 +287,7 @@ local function action_create_sends(src_tracks, dst_tracks, np)
   reaper.PreventUIRefresh(-1)
   reaper.UpdateArrange()
   reaper.Undo_EndBlock("SK RH : Create send(s)", -1)
-  set_status(string.format("✓ %d send(s) created", count))
+  set_status(string.format("✓ %d %s(s) created", count, noun))
 end
 
 local function action_create_sends_new_track(src_tracks, name, np)
@@ -316,6 +313,33 @@ local function action_create_sends_new_track(src_tracks, name, np)
   set_status(string.format("✓ \"%s\" created, %d send(s)", name, count))
 end
 
+-- Crée une nouvelle piste SOURCE juste avant la première piste sélectionnée,
+-- qui envoie son signal vers chaque piste sélectionnée (= receive sur celles-ci).
+local function action_create_recv_new_track(recv_tracks, name, np)
+  reaper.Undo_BeginBlock()
+  -- Position : juste avant la première piste sélectionnée
+  local first = math.huge
+  for _, t in ipairs(recv_tracks) do
+    local i = tidx(t) ; if i < first then first = i end
+  end
+  if first == math.huge then first = reaper.CountTracks(0) + 1 end
+  local insert_idx = first - 1  -- 0-based, avant la première
+  reaper.InsertTrackAtIndex(insert_idx, true)
+  local new_t = reaper.GetTrack(0, insert_idx)
+  reaper.GetSetMediaTrackInfo_String(new_t, "P_NAME", name, true)
+  local count = 0
+  for _, dst in ipairs(recv_tracks) do
+    if dst ~= new_t and reaper.ValidatePtr(dst, "MediaTrack*") then
+      reaper.CreateTrackSend(new_t, dst)
+      local n = reaper.GetTrackNumSends(new_t, 0)
+      apply_np(new_t, dst, n-1, np)
+      count = count + 1
+    end
+  end
+  reaper.Undo_EndBlock("SK RH : Receive(s) + new track", -1)
+  set_status(string.format("✓ \"%s\" created, %d receive(s)", name, count))
+end
+
 local function action_delete_send(track, idx)
   reaper.Undo_BeginBlock()
   reaper.RemoveTrackSend(track, 0, idx)
@@ -330,18 +354,11 @@ local function action_delete_receive(track, idx)
   set_status("✓ Receive removed")
 end
 
--- Ouvre la fenêtre I/O native REAPER pour une track
--- REAPER n'expose pas d'action "ouvrir le send N directement",
--- mais l'action 40293 ouvre le panneau I/O de la track sélectionnée,
--- ce qui est la fenêtre send/receive native.
--- Note API officielle : il n'existe pas d'action publique REAPER permettant
--- d'ouvrir la fenetre "Controls for track" d'un send specifique par index Lua.
--- Cette fenetre ne s'ouvre qu'en double-cliquant dans la routing matrix.
--- La meilleure alternative disponible : action 40293 ouvre la routing matrix
--- de la piste source, qui contient tous ses sends et permet d'y acceder.
+-- Ouvre la matrice de routing native de REAPER pour la piste, où l'on retrouve
+-- tous ses envois et retours.
 local function action_open_io(track)
   reaper.SetOnlyTrackSelected(track)
-  reaper.Main_OnCommand(40293, 0)  -- View: Show track routing/send matrix
+  reaper.Main_OnCommand(40293, 0)
 end
 
 local function action_set_send_field(track, cat, idx, field, val)
@@ -384,7 +401,6 @@ end
 
 -- ============================================================
 --  ACTION : CRÉER FOLDER depuis sélection
---  Logique identique au script de référence Studio Kozak
 -- ============================================================
 local function action_create_folder(folder_name, reaper_col)
   local n_sel = reaper.CountSelectedTracks(0)
@@ -439,11 +455,11 @@ local function action_create_folder(folder_name, reaper_col)
           break
         end
       end
-      -- Ajuster le depth du folder sélectionné
+      -- Ajuste le niveau d'imbrication du dossier sélectionné.
       local d = reaper.GetMediaTrackInfo_Value(s.track, "I_FOLDERDEPTH")
       reaper.SetMediaTrackInfo_Value(s.track, "I_FOLDERDEPTH", d + 1)
     else
-      -- Piste simple : depth = 0 (enfant du nouveau folder)
+      -- Piste simple : elle devient enfant du nouveau dossier.
       if cur_pos > last_pos then last_pos = cur_pos end
       reaper.SetMediaTrackInfo_Value(s.track, "I_FOLDERDEPTH", 0)
     end
@@ -484,7 +500,7 @@ local function action_add_child_track(track)
   -- Sinon : juste après la piste (elle va devenir un folder)
   local insert_index = sel_index + 1
 
-  local closing_track = nil  -- piste qui porte le depth fermant
+  local closing_track = nil  -- piste qui referme le dossier
 
   if folder_depth == 1 then
     -- Parcourir pour trouver la piste fermante du folder
@@ -509,7 +525,7 @@ local function action_add_child_track(track)
 
   if folder_depth == 1 then
     -- La piste fermante cède son rôle à la nouvelle :
-    -- ancienne fermante → depth=0, nouvelle → depth=-1
+    -- l'ancienne cesse de fermer le dossier, la nouvelle prend le relais.
     if closing_track then
       local cd = reaper.GetMediaTrackInfo_Value(closing_track, "I_FOLDERDEPTH")
       reaper.SetMediaTrackInfo_Value(closing_track, "I_FOLDERDEPTH", cd + 1)
@@ -708,7 +724,7 @@ local function action_create_vca(vca_name, reaper_col, mute_lead, solo_lead)
     reaper.SetTrackColor(vca_tr, reaper_col)
   end
 
-  -- Trouver un groupe VCA libre (1-8)
+  -- Cherche un groupe VCA encore libre.
   local free_group = nil
   for g = 1, 16 do
     local bit = 2^(g-1)
@@ -786,20 +802,179 @@ local function db_to_vol(db)
   return 10 ^ (db / 20)
 end
 
--- Knob circulaire 16x16 pour le volume d'un send
--- Retourne new_vol (linéaire) si modifié, nil sinon
--- Gère : drag vertical, Ctrl+drag fin, double-clic reset, clic droit saisie
-local KNOB_STATE = {}  -- { dragging, start_y, start_vol, popup_open, popup_buf }
+-- Bouton rotatif de volume d'un envoi. Glisser verticalement pour régler,
+-- Ctrl pour un réglage fin, double-clic pour revenir à 0 dB, clic droit pour
+-- saisir une valeur. Renvoie le nouveau volume si modifié, sinon rien.
+local KNOB_STATE = {}
 
+-- ============================================================
+--  EFFET 3D (BISEAU)
+-- ============================================================
+-- Donne un léger relief aux boutons : partie haute éclaircie, partie basse
+-- assombrie, avec une arête sur les bords. Quand le bouton est enfoncé, l'effet
+-- s'inverse pour donner l'impression qu'on l'appuie.
+-- Intensité globale : 0 = plat, 1 = normal, 1.5 = prononcé.
+local BEVEL = 1.0
+
+-- Applique le relief sur un rectangle donné.
+local function bevel_rect(x1, y1, x2, y2, rounding, pressed)
+  if BEVEL <= 0 then return end
+  rounding = rounding or 3
+  if (x2 - x1) < 4 or (y2 - y1) < 4 then return end  -- rectangle trop petit
+
+  local dl      = reaper.ImGui_GetWindowDrawList(ctx)
+  local a_hi    = math.min(0xFF, math.floor(0x24 * BEVEL))
+  local a_lo    = math.min(0xFF, math.floor(0x33 * BEVEL))
+  local hi      = 0xFFFFFF00 | a_hi   -- blanc translucide
+  local lo      = 0x00000000 | a_lo   -- noir translucide
+  local clear_w = 0xFFFFFF00
+  local clear_b = 0x00000000
+  local mid     = (y1 + y2) * 0.5
+
+  -- Dégradé : éclairci en haut, assombri en bas.
+  local top_col  = pressed and lo or hi
+  local top_zero = pressed and clear_b or clear_w
+  local bot_col  = pressed and hi or lo
+  local bot_zero = pressed and clear_w or clear_b
+  reaper.ImGui_DrawList_AddRectFilledMultiColor(dl,
+    x1+1, y1+1, x2-1, mid, top_col, top_col, top_zero, top_zero)
+  reaper.ImGui_DrawList_AddRectFilledMultiColor(dl,
+    x1+1, mid, x2-1, y2-1, bot_zero, bot_zero, bot_col, bot_col)
+
+  -- Arête claire en haut, sombre en bas (inversées si enfoncé).
+  local edge_hi = pressed and lo or hi
+  local edge_lo = pressed and hi or lo
+  reaper.ImGui_DrawList_AddLine(dl, x1+rounding, y1+0.5, x2-rounding, y1+0.5, edge_hi, 1)
+  reaper.ImGui_DrawList_AddLine(dl, x1+rounding, y2-0.5, x2-rounding, y2-0.5, edge_lo, 1)
+end
+
+-- Applique le relief au dernier bouton dessiné.
+local function add_bevel(rounding)
+  local x1, y1 = reaper.ImGui_GetItemRectMin(ctx)
+  local x2, y2 = reaper.ImGui_GetItemRectMax(ctx)
+  bevel_rect(x1, y1, x2, y2, rounding, reaper.ImGui_IsItemActive(ctx))
+end
+
+-- Applique le relief à la zone flèche d'un menu déroulant.
+local function bevel_combo_arrow()
+  local x1, y1 = reaper.ImGui_GetItemRectMin(ctx)
+  local x2, y2 = reaper.ImGui_GetItemRectMax(ctx)
+  local fh  = y2 - y1
+  local ax1 = x2 - fh          -- la flèche est un carré à droite
+  if ax1 < x1 + 2 then ax1 = x1 + 2 end
+  -- Petit trait de séparation entre le texte et la flèche.
+  if BEVEL > 0 then
+    local dl = reaper.ImGui_GetWindowDrawList(ctx)
+    reaper.ImGui_DrawList_AddLine(dl, ax1, y1+2, ax1, y2-2, 0x00000033, 1)
+  end
+  bevel_rect(ax1, y1, x2, y2, 3, reaper.ImGui_IsItemActive(ctx))
+end
+
+-- Réglage fin de la position verticale du texte des boutons.
+-- 0 = centré symétriquement (le plus équilibré) ; augmenter fait descendre le texte.
+local CAP_NUDGE = 0.0
+
+-- Dessine un libellé centré (horizontalement et verticalement) sur le dernier bouton.
+local function draw_centered_label(vis, txt_col)
+  if not vis or vis == "" then return end
+  local x1, y1 = reaper.ImGui_GetItemRectMin(ctx)
+  local x2, y2 = reaper.ImGui_GetItemRectMax(ctx)
+  local tw, th = reaper.ImGui_CalcTextSize(ctx, vis)
+  local dl = reaper.ImGui_GetWindowDrawList(ctx)
+  local tx = math.floor((x1 + x2 - tw) * 0.5 + 0.5)
+  local ty = math.floor((y1 + y2 - th) * 0.5 + th * CAP_NUDGE + 0.5)
+  reaper.ImGui_DrawList_AddText(dl, tx, ty, txt_col or C.text, vis)
+end
+
+-- Renvoie la partie affichée d'un libellé (avant le marqueur d'identifiant).
+local function label_vis(label)
+  local v = label:match("^(.-)##")
+  if v == nil then return label end
+  return v
+end
+
+-- Largeur/hauteur d'un bouton calculées à partir de son texte.
+local BTN_PAD_X = 8   -- marge horizontale intérieure d'un bouton
+
+local function auto_btn_size(vis, w, h)
+  local bw, bh = w, h
+  if not bw then
+    local tw = reaper.ImGui_CalcTextSize(ctx, vis)
+    bw = tw + BTN_PAD_X
+  end
+  if not bh then bh = reaper.ImGui_GetFrameHeight(ctx) end
+  return bw, bh
+end
+
+-- Bouton classique aux couleurs du thème, avec relief et libellé centré.
+local function btn(label, w, h)
+  local vis = label_vis(label)
+  local bw, bh = auto_btn_size(vis, w, h)
+  local r = reaper.ImGui_Button(ctx, "##"..label, bw, bh)
+  add_bevel()
+  draw_centered_label(vis, C.text)
+  return r
+end
+
+-- Bouton compact dont la couleur peut changer selon son état.
+local function icon_btn(id, glyph, w, h, txt_col, bg, bg_hov)
+  local nc = 0
+  if bg     then reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        bg);     nc = nc + 1 end
+  if bg_hov then reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), bg_hov); nc = nc + 1 end
+  local clicked = reaper.ImGui_Button(ctx, "##"..id, w, h)
+  if nc > 0 then reaper.ImGui_PopStyleColor(ctx, nc) end
+  add_bevel()
+  draw_centered_label(glyph, txt_col or C.text)
+  return clicked
+end
+
+-- Champ numérique encadré par des boutons - et +. Renvoie la valeur et un
+-- indicateur de changement.
+local function int_field(id, value, minv, maxv, width)
+  local FH = reaper.ImGui_GetFrameHeight(ctx)
+  local v, changed = value, false
+
+  if icon_btn(id.."_dec", "-", FH, FH, C.text, C.bg_item, 0x363636FF) then
+    v = v - 1 ; changed = true
+  end
+  reaper.ImGui_SameLine(ctx, 0, 3)
+
+  reaper.ImGui_SetNextItemWidth(ctx, width or 54)
+  local ch, nv = reaper.ImGui_InputInt(ctx, "##"..id, v, 0, 0)
+  if ch then v = nv ; changed = true end
+  -- Au repos, le nombre est affiché centré ; on repasse au champ éditable
+  -- classique dès qu'on clique dedans.
+  if not reaper.ImGui_IsItemActive(ctx) then
+    local x1, y1 = reaper.ImGui_GetItemRectMin(ctx)
+    local x2, y2 = reaper.ImGui_GetItemRectMax(ctx)
+    local dl = reaper.ImGui_GetWindowDrawList(ctx)
+    local cover = reaper.ImGui_IsItemHovered(ctx) and 0x363636FF or C.bg_item
+    reaper.ImGui_DrawList_AddRectFilled(dl, x1, y1, x2, y2, cover, 3)
+    draw_centered_label(tostring(v), C.text)
+  end
+  reaper.ImGui_SameLine(ctx, 0, 3)
+
+  if icon_btn(id.."_inc", "+", FH, FH, C.text, C.bg_item, 0x363636FF) then
+    v = v + 1 ; changed = true
+  end
+
+  if minv then v = math.max(minv, v) end
+  if maxv then v = math.min(maxv, v) end
+  return v, changed
+end
+
+-- ============================================================
+--  KNOB VOLUME
+-- ============================================================
 local function draw_vol_knob(uid, vol, bulk_edit, track, cat, s, other, is_recv)
-  local KS = 16  -- taille du knob
+  local KS = reaper.ImGui_GetFrameHeight(ctx)  -- knob = pleine hauteur de ligne
   local db  = vol_to_db(vol)
   local new_vol = nil
 
-  -- Normalisation non-linéaire : plus de résolution autour de 0 dB
+  -- Réglage plus fin autour de 0 dB qu'aux extrêmes.
   local function vol_to_norm(v)
     if v <= 0 then return 0 end
-    -- Mapper 0..2 (soit -inf..+6dB) vers 0..1
+    -- Ramène la plage de volume (jusqu'à +6 dB) sur 0..1.
     local clamped = math.min(v, db_to_vol(6))
     return (clamped / db_to_vol(6)) ^ (1/3)
   end
@@ -819,7 +994,7 @@ local function draw_vol_knob(uid, vol, bulk_edit, track, cat, s, other, is_recv)
   local active  = reaper.ImGui_IsItemActive(ctx)
   local cx, cy  = reaper.ImGui_GetItemRectMin(ctx)
   cx = cx + KS/2 ; cy = cy + KS/2
-  local R = KS/2 - 1
+  local R = KS/2 - 3
 
   -- Dessin du fond
   reaper.ImGui_DrawList_AddCircleFilled(draw, cx, cy, R, 0x2A2A2AFF)
@@ -842,7 +1017,11 @@ local function draw_vol_knob(uid, vol, bulk_edit, track, cat, s, other, is_recv)
     end
   end
 
-
+  -- Aiguille indicatrice (centre -> position courante)
+  local px = cx + (R-2) * math.cos(angle)
+  local py = cy + (R-2) * math.sin(angle)
+  reaper.ImGui_DrawList_AddLine(draw, cx, cy, px, py, 0xE8E8E8FF, 1.5)
+  reaper.ImGui_DrawList_AddCircleFilled(draw, cx, cy, 1.5, 0xE8E8E8FF)
 
   -- Infobulle au survol
   if hovered then
@@ -898,7 +1077,7 @@ local function draw_vol_knob(uid, vol, bulk_edit, track, cat, s, other, is_recv)
       if val then return db_to_vol(math.min(6.0, val)) end
       return nil
     end
-    -- InputText sans EnterReturnsTrue pour mettre à jour popup_buf à chaque frappe
+    -- Met à jour le texte saisi à chaque frappe.
     local _, nv = reaper.ImGui_InputText(ctx, "##kdb_"..uid, ks.popup_buf,
       reaper.ImGui_InputTextFlags_AutoSelectAll())
     if nv ~= nil then ks.popup_buf = nv end
@@ -910,7 +1089,7 @@ local function draw_vol_knob(uid, vol, bulk_edit, track, cat, s, other, is_recv)
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
     reaper.ImGui_SameLine(ctx, 0, 4)
-    if reaper.ImGui_Button(ctx, "OK##kdb_ok_"..uid) then
+    if btn("OK##kdb_ok_"..uid) then
       local v = parse_db_input(ks.popup_buf)
       if v ~= nil then new_vol = v end
       reaper.ImGui_CloseCurrentPopup(ctx)
@@ -918,7 +1097,7 @@ local function draw_vol_knob(uid, vol, bulk_edit, track, cat, s, other, is_recv)
     reaper.ImGui_Spacing(ctx)
     reaper.ImGui_Separator(ctx)
     reaper.ImGui_Spacing(ctx)
-    if reaper.ImGui_Button(ctx, "Reset 0 dB##kdb_rst_"..uid) then
+    if btn("Reset 0 dB##kdb_rst_"..uid) then
       new_vol = 1.0
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
@@ -927,7 +1106,7 @@ local function draw_vol_knob(uid, vol, bulk_edit, track, cat, s, other, is_recv)
 
   -- Appliquer le nouveau volume si modifié
   if new_vol ~= nil then
-    -- Calculer le delta en dB pour le bulk edit
+    -- Écart en dB à répercuter sur les autres envois.
     local old_db = vol_to_db(vol)
     local new_db = vol_to_db(new_vol)
     local delta_db = new_db - (old_db < -100 and -60 or old_db)
@@ -935,7 +1114,7 @@ local function draw_vol_knob(uid, vol, bulk_edit, track, cat, s, other, is_recv)
     action_set_send_field(track, cat, s.idx, "D_VOL", new_vol)
 
     if bulk_edit then
-      -- Bulk edit : propager le delta dB en préservant les balances
+      -- En édition groupée, on applique le même écart en gardant les équilibres.
       if cat == 0 then
         local sel_set = {}
         for _, t in ipairs(state.sel_tracks) do sel_set[t] = true end
@@ -953,7 +1132,7 @@ local function draw_vol_knob(uid, vol, bulk_edit, track, cat, s, other, is_recv)
           end
         end
       else
-        -- Receives
+        -- Retours
         if is_recv and other then
           local recvs = get_receives(track)
           for _, rv in ipairs(recvs) do
@@ -1013,20 +1192,29 @@ end
 -- ============================================================
 --  WIDGETS
 -- ============================================================
+
 local function danger_btn(label, w, h)
+  local vis = label_vis(label)
+  local bw, bh = auto_btn_size(vis, w, h)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        C.danger)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), C.danger_hov)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(),  0xCC4444FF)
-  local r = reaper.ImGui_Button(ctx, label, w, h)
+  local r = reaper.ImGui_Button(ctx, "##"..label, bw, bh)
   reaper.ImGui_PopStyleColor(ctx, 3)
+  add_bevel()
+  draw_centered_label(vis, C.white)
   return r
 end
 
 local function col_btn(label, col, hov, w, h)
+  local vis = label_vis(label)
+  local bw, bh = auto_btn_size(vis, w, h)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        col)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), hov or col)
-  local r = reaper.ImGui_Button(ctx, label, w, h)
+  local r = reaper.ImGui_Button(ctx, "##"..label, bw, bh)
   reaper.ImGui_PopStyleColor(ctx, 2)
+  add_bevel()
+  draw_centered_label(vis, C.white)
   return r
 end
 
@@ -1038,6 +1226,18 @@ local function sec_title(label)
   reaper.ImGui_Spacing(ctx)
 end
 
+-- Trait de séparation entre sections, plus visible que les traits ordinaires.
+-- Réservé aux frontières entre panneaux (SENDS / RECEIVES / VCA). Ne touche
+-- pas aux traits sous les titres, qui restent discrets.
+local function section_divider()
+  local x1, y   = reaper.ImGui_GetCursorScreenPos(ctx)
+  local availw  = reaper.ImGui_GetContentRegionAvail(ctx)
+  local dl      = reaper.ImGui_GetWindowDrawList(ctx)
+  local yy      = math.floor(y + 3) + 0.5
+  reaper.ImGui_DrawList_AddLine(dl, x1, yy, x1 + availw, yy, 0x707070FF, 2.0)
+  reaper.ImGui_Dummy(ctx, availw, 8)
+end
+
 -- ============================================================
 --  POPUP CRÉATION DE SEND
 --  Paramètres + sélection multi-destinations avec checkboxes
@@ -1045,65 +1245,61 @@ end
 local popup_filter  = ""
 local popup_newname = ""
 
-local function draw_create_popup(all_tracks, src_tracks)
+local function draw_create_popup(all_tracks, sel_tracks, mode)
+  local is_recv = (mode == "receive")
+  local popup_id       = is_recv and "New Receive"                or "New Send"
+  local params_title   = is_recv and "Receive parameters"         or "Send parameters"
+  local list_title     = is_recv and "Sources (check to select)"  or "Destinations (check to select)"
+  local newtrack_label = is_recv and "+ New send track:"          or "+ New destination track:"
+  local count_label    = is_recv and "Receives per source:"       or "Sends per destination:"
+
   reaper.ImGui_SetNextWindowSize(ctx, 480, 560, reaper.ImGui_Cond_Always())
-  if not reaper.ImGui_BeginPopupModal(ctx, "New Send", nil,
+  if not reaper.ImGui_BeginPopupModal(ctx, popup_id, nil,
       reaper.ImGui_WindowFlags_NoResize()) then return end
 
   local np = state.np
 
   -- ── Paramètres ──
-  sec_title("Send parameters")
+  sec_title(params_title)
 
   -- Mode
   reaper.ImGui_Text(ctx, "Type:")
   reaper.ImGui_SameLine(ctx, 90)
   reaper.ImGui_SetNextItemWidth(ctx, 200)
   local cm, nmi = reaper.ImGui_Combo(ctx, "##mode", np.mode_idx-1, SM_STR)
+  bevel_combo_arrow()
   if cm then np.mode_idx = nmi+1 end
 
-  -- Boutons toggle : M / O / MONO-ST / Master (identiques à send_row)
+  -- Boutons Mute / Phase / Mono / coupure du master
   reaper.ImGui_Spacing(ctx)
   local BTN_H = 22
 
   -- Mute
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),
-    np.mute and C.mute_on or C.bg_item)
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),
-    np.mute and C.mute_txt or C.text_dim)
-  if reaper.ImGui_Button(ctx, "M##np_mu", 28, BTN_H) then np.mute = not np.mute end
-  reaper.ImGui_PopStyleColor(ctx, 2)
+  if icon_btn("np_mu", "M", 28, BTN_H,
+      np.mute and C.mute_txt or C.text_dim,
+      np.mute and C.mute_on or C.bg_item) then np.mute = not np.mute end
   reaper.ImGui_SameLine(ctx, 0, 4)
 
   -- Phase
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),
-    np.phase and C.phase_on or C.bg_item)
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),
-    np.phase and C.phase_txt or C.text_dim)
-  if reaper.ImGui_Button(ctx, "O##np_ph", 28, BTN_H) then np.phase = not np.phase end
-  reaper.ImGui_PopStyleColor(ctx, 2)
+  if icon_btn("np_ph", "O", 28, BTN_H,
+      np.phase and C.phase_txt or C.text_dim,
+      np.phase and C.phase_on or C.bg_item) then np.phase = not np.phase end
   reaper.ImGui_SameLine(ctx, 0, 4)
 
   -- Mono / ST
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),
-    np.mono and C.mono_on or C.bg_item)
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),
-    np.mono and C.white or C.text_dim)
-  if reaper.ImGui_Button(ctx, np.mono and "<>##np_mn" or "><##np_mn", 30, BTN_H) then
+  if icon_btn("np_mn", (np.mono and "<>" or "><"), 30, BTN_H,
+      np.mono and C.white or C.text_dim,
+      np.mono and C.mono_on or C.bg_item) then
     np.mono = not np.mono
   end
-  reaper.ImGui_PopStyleColor(ctx, 2)
   reaper.ImGui_SameLine(ctx, 0, 12)
 
   -- Couper envoi au master
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),
-    np.main_send and C.danger or C.bg_item)
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),
-    np.main_send and 0xFF9999FF or C.text_dim)
-  if reaper.ImGui_Button(ctx, "MS##np_ms", 28, BTN_H) then
+  if icon_btn("np_ms", "MS", 28, BTN_H,
+      np.main_send and 0xFF9999FF or C.text_dim,
+      np.main_send and C.danger or C.bg_item) then
     np.main_send = not np.main_send
   end
-  reaper.ImGui_PopStyleColor(ctx, 2)
   reaper.ImGui_SameLine(ctx, 0, 6)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),
     np.main_send and 0xFF9999FF or C.text_dim)
@@ -1115,8 +1311,8 @@ local function draw_create_popup(all_tracks, src_tracks)
   reaper.ImGui_Separator(ctx)
   reaper.ImGui_Spacing(ctx)
 
-  -- ── Destinations ──
-  sec_title("Destinations (check to select)")
+  -- ── Liste des pistes (destinations pour send, sources pour receive) ──
+  sec_title(list_title)
 
   -- Filtre
   reaper.ImGui_SetNextItemWidth(ctx, 300)
@@ -1125,22 +1321,26 @@ local function draw_create_popup(all_tracks, src_tracks)
 
   -- Boutons tout/rien
   reaper.ImGui_SameLine(ctx, 0, 8)
-  if reaper.ImGui_Button(ctx, "All##all") then
+  if btn("All##all") then
     for _, dt in ipairs(all_tracks) do
-      local is_src = false
-      for _, st in ipairs(src_tracks) do if dt == st then is_src=true; break end end
-      if not is_src then state.dest_checked[tostring(dt)] = true end
+      local is_sel = false
+      for _, st in ipairs(sel_tracks) do if dt == st then is_sel=true; break end end
+      if not is_sel then state.dest_checked[tostring(dt)] = true end
     end
   end
   reaper.ImGui_SameLine(ctx, 0, 4)
-  if reaper.ImGui_Button(ctx, "None##none") then state.dest_checked = {} end
+  if btn("None##none") then state.dest_checked = {} end
 
-  -- Liste checkboxes
-  reaper.ImGui_BeginChild(ctx, "dlist", 0, 170, 1)
+  -- Liste checkboxes : hauteur négative = remplit l'espace restant en laissant
+  -- la place aux contrôles du bas (nouvelle piste, compteur, boutons).
+  local fhs = reaper.ImGui_GetFrameHeightWithSpacing(ctx)
+  local tls = reaper.ImGui_GetTextLineHeightWithSpacing(ctx)
+  local reserved = tls + fhs * 3 + 34
+  reaper.ImGui_BeginChild(ctx, "dlist", 0, -reserved, 1)
   for _, dt in ipairs(all_tracks) do
-    local is_src = false
-    for _, st in ipairs(src_tracks) do if dt == st then is_src=true; break end end
-    if not is_src then
+    local is_sel = false
+    for _, st in ipairs(sel_tracks) do if dt == st then is_sel=true; break end end
+    if not is_sel then
       local dn = tname(dt)
       local ok = popup_filter == "" or dn:lower():find(popup_filter:lower(), 1, true)
       if ok then
@@ -1169,16 +1369,20 @@ local function draw_create_popup(all_tracks, src_tracks)
 
   reaper.ImGui_Spacing(ctx)
 
-  -- Nouvelle piste
+  -- Nouvelle piste (destination pour send, source pour receive)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0xAAFFAAFF)
-  reaper.ImGui_Text(ctx, "+ New destination track:")
+  reaper.ImGui_Text(ctx, newtrack_label)
   reaper.ImGui_PopStyleColor(ctx, 1)
   reaper.ImGui_SetNextItemWidth(ctx, 270)
   local chn, nn = reaper.ImGui_InputText(ctx, "##ntn", popup_newname)
   if chn then popup_newname = nn end
   reaper.ImGui_SameLine(ctx, 0, 6)
   if col_btn("Create##ntnbtn", C.new_trk, C.new_trk_h) and popup_newname ~= "" then
-    action_create_sends_new_track(src_tracks, popup_newname, np)
+    if is_recv then
+      action_create_recv_new_track(sel_tracks, popup_newname, np)
+    else
+      action_create_sends_new_track(sel_tracks, popup_newname, np)
+    end
     popup_newname = "" ; popup_filter = ""
     state.dest_checked = {}
     reaper.ImGui_CloseCurrentPopup(ctx)
@@ -1188,49 +1392,52 @@ local function draw_create_popup(all_tracks, src_tracks)
   reaper.ImGui_Separator(ctx)
   reaper.ImGui_Spacing(ctx)
 
-  -- Compte les destinations cochées
-  local dsts = {}
+  -- Compte les pistes cochées
+  local picked = {}
   for _, dt in ipairs(all_tracks) do
-    if state.dest_checked[tostring(dt)] then dsts[#dsts+1] = dt end
+    if state.dest_checked[tostring(dt)] then picked[#picked+1] = dt end
   end
 
-  -- Nombre de sends à créer par destination
+  -- Nombre de sends/receives à créer par piste cochée
   reaper.ImGui_AlignTextToFramePadding(ctx)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), C.text_dim)
-  reaper.ImGui_Text(ctx, "Sends per destination:")
+  reaper.ImGui_Text(ctx, count_label)
   reaper.ImGui_PopStyleColor(ctx, 1)
   reaper.ImGui_SameLine(ctx, 0, 6)
-  reaper.ImGui_SetNextItemWidth(ctx, 60)
-  local nsc, nsv = reaper.ImGui_InputInt(ctx, "##new_send_count", state.new_send_count)
-  if nsc then state.new_send_count = math.max(1, math.min(16, nsv)) end
+  local nsv, nsc = int_field("new_send_count", state.new_send_count, 1, 16, 54)
+  if nsc then state.new_send_count = nsv end
   reaper.ImGui_Spacing(ctx)
 
   -- Boutons Create / Cancel
-  local total_sends = #dsts * state.new_send_count
-  local ok_label = #dsts > 0
-    and (total_sends == 1
-      and "Create (1 send)##ok"
-      or  string.format("Create (%d sends)##ok", total_sends))
-    or  "Create##ok_dis"
-  local can_create = #dsts > 0
+  local total = #picked * state.new_send_count
+  local can_create = #picked > 0
+  local noun = is_recv and "receive" or "send"
+  local create_vis = can_create
+    and (total == 1
+      and string.format("Create (1 %s)", noun)
+      or  string.format("Create (%d %ss)", total, noun))
+    or  "Create"
 
-  if not can_create then
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        0x333333FF)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x333333FF)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),          C.text_dim)
-  end
-  if reaper.ImGui_Button(ctx, ok_label, 140) and can_create then
+  if icon_btn("ok_create", create_vis, 140, nil,
+      can_create and C.white     or C.text_dim,
+      can_create and C.send_col  or 0x333333FF,
+      can_create and 0x4A9A6AFF  or 0x333333FF) and can_create then
     for _ = 1, state.new_send_count do
-      action_create_sends(src_tracks, dsts, np)
+      if is_recv then
+        -- receive : sends depuis chaque source cochée vers chaque piste sélectionnée
+        action_create_sends(picked, sel_tracks, np, "receive")
+      else
+        -- send : sends depuis chaque piste sélectionnée vers chaque destination cochée
+        action_create_sends(sel_tracks, picked, np, "send")
+      end
     end
     popup_filter = "" ; state.dest_checked = {}
     state.new_send_count = 1
     reaper.ImGui_CloseCurrentPopup(ctx)
   end
-  if not can_create then reaper.ImGui_PopStyleColor(ctx, 3) end
 
   reaper.ImGui_SameLine(ctx, 0, 10)
-  if reaper.ImGui_Button(ctx, "Cancel", 80) then
+  if btn("Cancel", 80) then
     popup_filter = "" ; popup_newname = ""
     state.dest_checked = {}
     state.new_send_count = 1
@@ -1241,22 +1448,16 @@ local function draw_create_popup(all_tracks, src_tracks)
 end
 
 -- ============================================================
---  LIGNE DE SEND/RECEIVE — 1 LIGNE COMPACTE
---  track    : piste de référence
---  s        : données du send (read_send)
---  uid      : ID unique string
---  cat      : 0 = send, -1 = receive
---  all_tracks
---  Retourne true si suppression demandée
+--  LIGNE DE SEND / RECEIVE
 -- ============================================================
--- Pour les sends  : orig_dest = piste destination d'origine (filtre par dest)
--- Pour les receives : orig_track = piste destinataire sur laquelle on agit (filtre par dest)
+-- Répercute une modification sur tous les envois (ou retours) équivalents des
+-- pistes sélectionnées, quand l'édition groupée est active.
 local function bulk_apply(param, value, cat, orig_dest, orig_track)
   local sel_set = {}
   for _, t in ipairs(state.sel_tracks) do sel_set[t] = true end
 
   if cat == 0 then
-    -- Sends : propager aux sends vers la même destination d'origine
+    -- Envois : on suit ceux qui pointent vers la même destination.
     for _, src in ipairs(state.sel_tracks) do
       local sends = get_sends(src)
       for _, s in ipairs(sends) do
@@ -1275,12 +1476,11 @@ local function bulk_apply(param, value, cat, orig_dest, orig_track)
       end
     end
   else
-    -- Receives : propager à TOUS les receives de la même piste destinataire
-    -- (orig_track = la piste FX sur laquelle on agit)
+    -- Retours : on suit tous les retours de la même piste réceptrice.
     if orig_track then
       local recvs = get_receives(orig_track)
       for _, r in ipairs(recvs) do
-        -- Créer les canaux nécessaires sur la piste source du receive
+        -- Prévoit assez de canaux sur la piste qui émet.
         if param == "I_SRCCHAN" then
           local pair = math.floor(value / 2) + 1
           ensure_chans(r.src, pair * 2)
@@ -1308,6 +1508,33 @@ local function bulk_apply(param, value, cat, orig_dest, orig_track)
   end
 end
 
+-- Constantes de mise en page d'une ligne send/receive.
+-- Dimensions d'une ligne send/receive, ajustées pour que tous les éléments
+-- (bouton rotatif, menus, boutons) soient à la même hauteur et bien alignés.
+local ROW = {
+  BADGE  = 7,    -- largeur de la pastille de couleur
+  KNOB_X = 140,  -- position du bouton rotatif, identique sur toutes les lignes
+  GAP    = 4,    -- espace entre les groupes d'éléments
+  TIGHT  = 2,    -- espace entre un libellé et son menu
+  MODE_W = 168,  -- largeur du menu Type
+  CH_W   = 50,   -- largeur des menus de canaux
+  MONO_X = 6,    -- élargissement du bouton mono
+}
+
+-- Raccourcit un nom pour qu'il tienne dans la largeur disponible.
+local function fit_name(arrow, raw, max_w)
+  local full = arrow .. raw
+  local w = reaper.ImGui_CalcTextSize(ctx, full)
+  if w <= max_w then return full end
+  local lo, hi = 0, #raw
+  while lo < hi do
+    local mid = math.floor((lo + hi + 1) / 2)
+    local cand = arrow .. raw:sub(1, mid) .. "~"
+    if reaper.ImGui_CalcTextSize(ctx, cand) <= max_w then lo = mid else hi = mid - 1 end
+  end
+  return arrow .. raw:sub(1, lo) .. "~"
+end
+
 local function send_row(track, s, uid, cat, all_tracks, bulk_edit)
   local is_recv   = (cat == -1)
   local other     = is_recv and s.src or s.dest
@@ -1317,122 +1544,120 @@ local function send_row(track, s, uid, cat, all_tracks, bulk_edit)
   local dst_ref = is_recv and track or other
   local u = uid
 
-  -- Layout identique au SK Routing Hub :
-  -- widgets directs avec SameLine, pas de BeginChild ni BeginTable.
-  -- PushStyleColor utilisé UNIQUEMENT sur Col_Text (jamais Col_Button dans une boucle).
-  local ROW_H = 20
+  local FH   = reaper.ImGui_GetFrameHeight(ctx)  -- hauteur commune
+  local SQ   = FH                                 -- boutons carrés
+  local MONO = FH + ROW.MONO_X
 
-  -- Badge couleur (bouton sans style push/pop pour Col_Button)
+  -- Pastille de couleur de la piste.
   local oc = rcolor(other)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        oc)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), oc)
-  reaper.ImGui_Button(ctx, "##bg_"..u, 7, ROW_H)
+  reaper.ImGui_Button(ctx, "##bg_"..u, ROW.BADGE, FH)
   reaper.ImGui_PopStyleColor(ctx, 2)
-  reaper.ImGui_SameLine(ctx, 0, 3)
+  reaper.ImGui_SameLine(ctx, 0, ROW.GAP)
 
-  -- Nom tronqué (position X fixe après badge)
-  local col_name_x = 145  -- X absolu pour le début du combo Mode
-  local arrow = is_recv and "<- " or "-> "
-  local raw   = tname(other)
-  local disp  = #raw > 16 and (raw:sub(1,15).."~") or raw
+  -- Nom de la piste, raccourci si besoin.
+  local arrow  = is_recv and "<- " or "-> "
+  local name_w = ROW.KNOB_X - reaper.ImGui_GetCursorPosX(ctx) - 6
+  local disp   = fit_name(arrow, tname(other), name_w)
+  reaper.ImGui_AlignTextToFramePadding(ctx)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),
     is_recv and 0xAAAAEEFF or C.white)
-  reaper.ImGui_Text(ctx, arrow..disp)
+  reaper.ImGui_Text(ctx, disp)
   reaper.ImGui_PopStyleColor(ctx, 1)
 
-  reaper.ImGui_SameLine(ctx, col_name_x)
-
-  -- Knob volume (centré verticalement sur ROW_H=20)
-  local knob_cy = reaper.ImGui_GetCursorPosY(ctx)
-  reaper.ImGui_SetCursorPosY(ctx, knob_cy + (ROW_H - 16) * 0.5)
+  -- Bouton rotatif de volume, à position fixe.
+  reaper.ImGui_SameLine(ctx, ROW.KNOB_X)
   draw_vol_knob(u, s.vol, bulk_edit, track, cat, s, other, is_recv)
-  reaper.ImGui_SetCursorPosY(ctx, knob_cy)
-  reaper.ImGui_SameLine(ctx, 0, 4)
+  reaper.ImGui_SameLine(ctx, 0, ROW.GAP)
 
   -- Mode
-  reaper.ImGui_SetNextItemWidth(ctx, 152)
+  reaper.ImGui_SetNextItemWidth(ctx, ROW.MODE_W)
   local cmi, nmi = reaper.ImGui_Combo(ctx, "##mode_"..u, sm_to_idx(s.mode)-1, SM_STR)
+  bevel_combo_arrow()
   if cmi then
     local v = SM_VALS[nmi+1]
     action_set_send_field(track, cat, s.idx, "I_SENDMODE", v)
     if bulk_edit then bulk_apply("I_SENDMODE", v, cat, is_recv and nil or other, is_recv and track or nil) end
   end
-  reaper.ImGui_SameLine(ctx, 0, 3)
+  reaper.ImGui_SameLine(ctx, 0, ROW.GAP)
 
   -- Mute
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),
-    s.mute and C.mute_txt or C.text_dim)
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),
-    s.mute and C.mute_on or C.bg_item)
-  if reaper.ImGui_Button(ctx, "M##mu_"..u, 22, ROW_H) then
+  if icon_btn("mu_"..u, "M", SQ, FH,
+      s.mute and C.mute_txt or C.text_dim,
+      s.mute and C.mute_on or C.bg_item) then
     local v = s.mute and 0 or 1
     action_set_send_field(track, cat, s.idx, "B_MUTE", v)
     if bulk_edit then bulk_apply("B_MUTE", v, cat, is_recv and nil or other, is_recv and track or nil) end
   end
-  reaper.ImGui_PopStyleColor(ctx, 2)
+  if reaper.ImGui_IsItemHovered(ctx) then reaper.ImGui_SetTooltip(ctx, "Mute") end
   reaper.ImGui_SameLine(ctx, 0, 3)
 
   -- Phase
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),
-    s.phase and C.phase_txt or C.text_dim)
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),
-    s.phase and C.phase_on or C.bg_item)
-  if reaper.ImGui_Button(ctx, "O##ph_"..u, 22, ROW_H) then
+  if icon_btn("ph_"..u, "O", SQ, FH,
+      s.phase and C.phase_txt or C.text_dim,
+      s.phase and C.phase_on or C.bg_item) then
     local v = s.phase and 0 or 1
     action_set_send_field(track, cat, s.idx, "B_PHASE", v)
     if bulk_edit then bulk_apply("B_PHASE", v, cat, is_recv and nil or other, is_recv and track or nil) end
   end
-  reaper.ImGui_PopStyleColor(ctx, 2)
+  if reaper.ImGui_IsItemHovered(ctx) then reaper.ImGui_SetTooltip(ctx, "Polarity / phase") end
   reaper.ImGui_SameLine(ctx, 0, 3)
 
   -- Mono/ST
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),
-    s.mono and C.white or C.text_dim)
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),
-    s.mono and C.mono_on or C.bg_item)
-  if reaper.ImGui_Button(ctx, (s.mono and "<>" or "><").."##mn_"..u, 30, ROW_H) then
+  if icon_btn("mn_"..u, (s.mono and "<>" or "><"), MONO, FH,
+      s.mono and C.white or C.text_dim,
+      s.mono and C.mono_on or C.bg_item) then
     local v = s.mono and 0 or 1
     action_set_send_field(track, cat, s.idx, "B_MONO", v)
     if bulk_edit then bulk_apply("B_MONO", v, cat, is_recv and nil or other, is_recv and track or nil) end
   end
-  reaper.ImGui_PopStyleColor(ctx, 2)
-  reaper.ImGui_SameLine(ctx, 0, 3)
+  if reaper.ImGui_IsItemHovered(ctx) then
+    reaper.ImGui_SetTooltip(ctx, s.mono and "Mono" or "Stereo")
+  end
+  reaper.ImGui_SameLine(ctx, 0, ROW.GAP)
 
   -- Src canaux
+  reaper.ImGui_AlignTextToFramePadding(ctx)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), C.text_dim)
   reaper.ImGui_Text(ctx, "src")
   reaper.ImGui_PopStyleColor(ctx, 1)
-  reaper.ImGui_SameLine(ctx, 0, 2)
-  reaper.ImGui_SetNextItemWidth(ctx, 56)
+  reaper.ImGui_SameLine(ctx, 0, ROW.TIGHT)
+  reaper.ImGui_SetNextItemWidth(ctx, ROW.CH_W)
   local csp, nsp = reaper.ImGui_Combo(ctx, "##srcp_"..u, s.src_pair-1, PAIRS_STR)
+  bevel_combo_arrow()
   if csp then
     local v = enc_srcchan(nsp+1)
     ensure_chans(src_ref, (nsp+1)*2)
     action_set_send_field(track, cat, s.idx, "I_SRCCHAN", v)
     if bulk_edit then bulk_apply("I_SRCCHAN", v, cat, is_recv and nil or other, is_recv and track or nil) end
   end
-  reaper.ImGui_SameLine(ctx, 0, 3)
+  reaper.ImGui_SameLine(ctx, 0, ROW.GAP)
 
   -- Dst canaux
+  reaper.ImGui_AlignTextToFramePadding(ctx)
   reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), C.text_dim)
   reaper.ImGui_Text(ctx, "dst")
   reaper.ImGui_PopStyleColor(ctx, 1)
-  reaper.ImGui_SameLine(ctx, 0, 2)
-  reaper.ImGui_SetNextItemWidth(ctx, 56)
+  reaper.ImGui_SameLine(ctx, 0, ROW.TIGHT)
+  reaper.ImGui_SetNextItemWidth(ctx, ROW.CH_W)
   local cdp, ndp = reaper.ImGui_Combo(ctx, "##dstp_"..u, s.dst_pair-1, PAIRS_STR)
+  bevel_combo_arrow()
   if cdp then
     local v = enc_dstchan(ndp+1)
     ensure_chans(dst_ref, (ndp+1)*2)
     action_set_send_field(track, cat, s.idx, "I_DSTCHAN", v)
     if bulk_edit then bulk_apply("I_DSTCHAN", v, cat, is_recv and nil or other, is_recv and track or nil) end
   end
-  reaper.ImGui_SameLine(ctx, 0, 3)
+  reaper.ImGui_SameLine(ctx, 0, ROW.GAP)
 
-  -- IO
-  -- Changer destination (sends seulement)
+  -- Changer destination (sends) / cellule vide (receives) pour aligner le X
   if not is_recv then
-    if reaper.ImGui_Button(ctx, "->##chgd_"..u, 24, ROW_H) then
+    if icon_btn("chgd_"..u, "->", SQ, FH, C.text) then
       reaper.ImGui_OpenPopup(ctx, "chgdest_"..u)
+    end
+    if reaper.ImGui_IsItemHovered(ctx) then
+      reaper.ImGui_SetTooltip(ctx, "Change destination")
     end
     if reaper.ImGui_BeginPopup(ctx, "chgdest_"..u) then
       reaper.ImGui_Text(ctx, "New destination:")
@@ -1472,17 +1697,20 @@ local function send_row(track, s, uid, cat, all_tracks, bulk_edit)
       end
       reaper.ImGui_EndPopup(ctx)
     end
-    reaper.ImGui_SameLine(ctx, 0, 3)
+  else
+    reaper.ImGui_Dummy(ctx, SQ, FH)  -- réserve la colonne pour aligner le X
   end
+  reaper.ImGui_SameLine(ctx, 0, 3)
 
   -- Supprimer
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0xFF8888FF)
-  if reaper.ImGui_Button(ctx, "X##del_"..u, 24, ROW_H) then
+  if icon_btn("del_"..u, "X", SQ, FH, 0xFF8888FF) then
     do_del = true
-    -- En mode bulk : signaler qu'il faut supprimer tous les sends visibles
+    -- En édition groupée, on supprime tous les envois affichés.
     if bulk_edit then bulk_delete = true end
   end
-  reaper.ImGui_PopStyleColor(ctx, 1)
+  if reaper.ImGui_IsItemHovered(ctx) then
+    reaper.ImGui_SetTooltip(ctx, bulk_edit and "Remove (bulk)" or "Remove")
+  end
 
   return do_del, bulk_delete
 end
@@ -1528,7 +1756,7 @@ local function panel_sends(all_tracks)
     state.dest_checked = {}
     reaper.ImGui_OpenPopup(ctx, "New Send")
   end
-  draw_create_popup(all_tracks, state.sel_tracks)
+  draw_create_popup(all_tracks, state.sel_tracks, "send")
 
   reaper.ImGui_Spacing(ctx)
 
@@ -1545,12 +1773,14 @@ local function panel_sends(all_tracks)
     if #vis > 0 then
       any = true
         if nb > 1 then
+        reaper.ImGui_Spacing(ctx)
         local sc = rcolor(src)
         reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        sc)
         reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), sc)
-        reaper.ImGui_Button(ctx, "##sh_s"..tostring(src), 5, 14)
+        reaper.ImGui_Button(ctx, "##sh_s"..tostring(src), 5, 16)
         reaper.ImGui_PopStyleColor(ctx, 2)
         reaper.ImGui_SameLine(ctx, 0, 5)
+        reaper.ImGui_AlignTextToFramePadding(ctx)
         reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), C.text_dim)
         reaper.ImGui_Text(ctx, tname(src))
         reaper.ImGui_PopStyleColor(ctx, 1)
@@ -1561,7 +1791,7 @@ local function panel_sends(all_tracks)
         local del, bulk_del = send_row(src, s, uid, 0, all_tracks, state.bulk_edit_sends)
         if del then
           if bulk_del then
-            -- Supprimer les sends vers la même destination sur toutes les pistes sélectionnées
+            -- Supprime les envois vers cette destination sur toutes les pistes sélectionnées.
             local orig = s.dest
             for _, bsrc in ipairs(state.sel_tracks) do
               local bsends = get_sends(bsrc)
@@ -1626,18 +1856,33 @@ local function panel_receives(all_tracks)
   local any  = false
   local to_del = {}
 
+  -- Bouton + New receive : ouvre le popup "New Receive" (sends depuis les
+  -- pistes sources cochées vers les pistes sélectionnées).
+  local rlbl = nb > 1
+    and string.format("+ Receive to %d tracks##nr", nb)
+    or  "+ New receive##nr"
+  if col_btn(rlbl, C.recv_col, 0x6A5A9AFF) then
+    state.dest_checked = {}
+    reaper.ImGui_OpenPopup(ctx, "New Receive")
+  end
+  draw_create_popup(all_tracks, state.sel_tracks, "receive")
+
+  reaper.ImGui_Spacing(ctx)
+
   for _, dst in ipairs(state.sel_tracks) do
     local recvs = get_receives(dst)
     if #recvs > 0 then
       any = true
-      -- Sous-header : simple ligne sans BeginChild
+      -- Rappel du nom de la piste au-dessus de ses retours.
       if nb > 1 then
+        reaper.ImGui_Spacing(ctx)
         local dc = rcolor(dst)
         reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        dc)
         reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), dc)
-        reaper.ImGui_Button(ctx, "##rsh_r"..tostring(dst), 5, 14)
+        reaper.ImGui_Button(ctx, "##rsh_r"..tostring(dst), 5, 16)
         reaper.ImGui_PopStyleColor(ctx, 2)
         reaper.ImGui_SameLine(ctx, 0, 5)
+        reaper.ImGui_AlignTextToFramePadding(ctx)
         reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), C.text_dim)
         reaper.ImGui_Text(ctx, tname(dst))
         reaper.ImGui_PopStyleColor(ctx, 1)
@@ -1648,7 +1893,7 @@ local function panel_receives(all_tracks)
         local del, bulk_del = send_row(dst, r, uid, -1, all_tracks, state.bulk_edit_recvs)
         if del then
           if bulk_del then
-            -- Supprimer tous les receives de la même piste destinataire (dst)
+            -- Supprime tous les retours de cette piste.
             local brecvs = get_receives(dst)
             for _, brv in ipairs(brecvs) do
               to_del[#to_del+1] = { dst, brv.idx }
@@ -1752,7 +1997,7 @@ local function panel_vca()
     end
   else
     -- Bouton + Master → popup choix groupe + options
-    if col_btn("+ Master##vcasm", C.vca_col, 0xAA8A3AFF) then
+    if col_btn("+ Master##vcasm", C.vca_col, 0xAA8A3AFF, 90) then
       reaper.ImGui_OpenPopup(ctx, "vcamst")
     end
     if reaper.ImGui_BeginPopup(ctx, "vcamst") then
@@ -1848,18 +2093,38 @@ local function panel_vca()
     end
     -- Bouton + Slave sur nouvelle ligne
     reaper.ImGui_SetCursorPosX(ctx, 70)
-    if col_btn("+ Slave##vcass2", C.vca_col, 0xAA8A3AFF) then
+    if col_btn("+ Slave##vcass2", C.vca_col, 0xAA8A3AFF, 90) then
       reaper.ImGui_OpenPopup(ctx, "vcaslv")
     end
   else
     reaper.ImGui_SameLine(ctx, 70)
-    if col_btn("+ Slave##vcass", C.vca_col, 0xAA8A3AFF) then
+    if col_btn("+ Slave##vcass", C.vca_col, 0xAA8A3AFF, 90) then
       reaper.ImGui_OpenPopup(ctx, "vcaslv")
     end
   end
 
   if reaper.ImGui_BeginPopup(ctx, "vcaslv") then
     reaper.ImGui_Text(ctx, "VCA Group:") ; reaper.ImGui_Separator(ctx)
+    -- Options Mute Follow / Solo Follow EN PREMIER (avant la liste des groupes)
+    if state.vca_slv_opts == nil then
+      state.vca_slv_opts = { mute_follow = false, solo_follow = false }
+    end
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Border(),    0xBBBBBBFF)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(),   0x444444FF)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_CheckMark(), 0xDDDDDDFF)
+    reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameBorderSize(), 1)
+    local _, mfv = reaper.ImGui_Checkbox(ctx, "Mute Follow##vcamf",
+      state.vca_slv_opts.mute_follow)
+    if mfv ~= nil then state.vca_slv_opts.mute_follow = mfv end
+    reaper.ImGui_SameLine(ctx, 0, 12)
+    local _, sfv = reaper.ImGui_Checkbox(ctx, "Solo Follow##vcasf",
+      state.vca_slv_opts.solo_follow)
+    if sfv ~= nil then state.vca_slv_opts.solo_follow = sfv end
+    reaper.ImGui_PopStyleVar(ctx, 1)
+    reaper.ImGui_PopStyleColor(ctx, 3)
+    reaper.ImGui_Separator(ctx)
+    reaper.ImGui_Spacing(ctx)
+    -- Liste des groupes APRÈS les options
     for g = 1, 16 do
       local bit = 2^(g-1)
       local nm, _ = grp_master_name(bit)
@@ -1895,25 +2160,6 @@ local function panel_vca()
         set_status("Slave G"..g.." assigned.")
       end
     end
-    reaper.ImGui_Separator(ctx)
-    reaper.ImGui_Spacing(ctx)
-    -- Options Mute Follow / Solo Follow
-    if state.vca_slv_opts == nil then
-      state.vca_slv_opts = { mute_follow = false, solo_follow = false }
-    end
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Border(),    0xBBBBBBFF)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(),   0x444444FF)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_CheckMark(), 0xDDDDDDFF)
-    reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameBorderSize(), 1)
-    local _, mfv = reaper.ImGui_Checkbox(ctx, "Mute Follow##vcamf",
-      state.vca_slv_opts.mute_follow)
-    if mfv ~= nil then state.vca_slv_opts.mute_follow = mfv end
-    reaper.ImGui_SameLine(ctx, 0, 12)
-    local _, sfv = reaper.ImGui_Checkbox(ctx, "Solo Follow##vcasf",
-      state.vca_slv_opts.solo_follow)
-    if sfv ~= nil then state.vca_slv_opts.solo_follow = sfv end
-    reaper.ImGui_PopStyleVar(ctx, 1)
-    reaper.ImGui_PopStyleColor(ctx, 3)
     reaper.ImGui_EndPopup(ctx)
   end
 
@@ -2014,7 +2260,7 @@ local function draw_color_picker_popup()
   reaper.ImGui_Separator(ctx)
   reaper.ImGui_Spacing(ctx)
 
-  if reaper.ImGui_Button(ctx, "Clear color##cp_clr") then
+  if btn("Clear color##cp_clr") then
     remove_color_from_sel()
     reaper.ImGui_CloseCurrentPopup(ctx)
   end
@@ -2034,7 +2280,7 @@ end
 --  COLONNE GAUCHE
 -- ============================================================
 local function draw_left(all_tracks_unused)
-  -- Header fixe HORS du BeginChild (ne scrolle pas)
+  -- L'en-tête reste fixe, il ne défile pas avec la liste.
   if col_btn("+ Track##new_tr", C.send_col, 0x4A9A6AFF) then
     state.new_track_color = 0
       state.new_track_cp_pastel = 0.3
@@ -2152,7 +2398,7 @@ local function draw_left(all_tracks_unused)
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
     reaper.ImGui_SameLine(ctx, 0, 8)
-    if reaper.ImGui_Button(ctx, "Cancel##fx_no") then
+    if btn("Cancel##fx_no") then
       state.fx_name_buf = ""
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
@@ -2261,7 +2507,7 @@ local function draw_left(all_tracks_unused)
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
     reaper.ImGui_SameLine(ctx, 0, 8)
-    if reaper.ImGui_Button(ctx, "Cancel##vca_no") then
+    if btn("Cancel##vca_no") then
       state.vca_name_buf = ""
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
@@ -2342,7 +2588,7 @@ local function draw_left(all_tracks_unused)
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
     reaper.ImGui_SameLine(ctx, 0, 8)
-    if reaper.ImGui_Button(ctx, "Cancel##bus_no") then
+    if btn("Cancel##bus_no") then
       state.bus_name_buf = ""
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
@@ -2423,7 +2669,7 @@ local function draw_left(all_tracks_unused)
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
     reaper.ImGui_SameLine(ctx, 0, 8)
-    if reaper.ImGui_Button(ctx, "Cancel##folder_no") then
+    if btn("Cancel##folder_no") then
       state.folder_name_buf = ""
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
@@ -2433,9 +2679,8 @@ local function draw_left(all_tracks_unused)
       reaper.ImGui_WindowFlags_AlwaysAutoResize()) then
 
     reaper.ImGui_Text(ctx, "Number of tracks to create:")
-    reaper.ImGui_SetNextItemWidth(ctx, 80)
-    local cc, cv = reaper.ImGui_InputInt(ctx, "##new_tr_count", state.new_track_count)
-    if cc then state.new_track_count = math.max(1, math.min(64, cv)) end
+    local cv, cc = int_field("new_tr_count", state.new_track_count, 1, 64, 60)
+    if cc then state.new_track_count = cv end
 
     reaper.ImGui_Spacing(ctx)
     reaper.ImGui_Text(ctx, "Name mask:")
@@ -2563,7 +2808,7 @@ local function draw_left(all_tracks_unused)
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
     reaper.ImGui_SameLine(ctx, 0, 8)
-    if reaper.ImGui_Button(ctx, "Cancel##new_tr_no") then
+    if btn("Cancel##new_tr_no") then
       state.new_track_name  = ""
       state.new_track_count = 1
       state.new_track_color = 0
@@ -2580,7 +2825,7 @@ local function draw_left(all_tracks_unused)
     return
   end
 
-  -- Liste scrollable dans un BeginChild sans PushStyleColor autour
+  -- Liste des pistes du projet, défilante.
   local child_ok = reaper.ImGui_BeginChild(ctx, "left_list", COL_LEFT_W, 0, 0)
   if not child_ok then
     reaper.ImGui_EndChild(ctx)
@@ -2605,10 +2850,10 @@ local function draw_left(all_tracks_unused)
     reaper.ImGui_PopStyleColor(ctx, 2)
     reaper.ImGui_SameLine(ctx, 0, 4)
 
-    -- Selectable ou InputText selon mode renommage
+    -- Affiche le nom, ou un champ de saisie pendant le renommage.
     local sel_w = aw - 119  -- badge(9) + D(26) + IO(28) + MS(30) + del(26)
     if state.rename_track_ptr == t then
-      -- Mode renommage : InputText inline
+      -- Renommage en cours : champ de saisie à la place du nom.
       reaper.ImGui_SetNextItemWidth(ctx, sel_w)
       local flags = reaper.ImGui_InputTextFlags_EnterReturnsTrue()
                   | reaper.ImGui_InputTextFlags_AutoSelectAll()
@@ -2673,9 +2918,9 @@ local function draw_left(all_tracks_unused)
       reaper.ImGui_PopStyleColor(ctx, 2)
     end
 
-    -- Menu contextuel clic droit (doit être immédiatement après le Selectable)
+    -- Menu au clic droit sur la piste.
     if reaper.ImGui_BeginPopupContextItem(ctx, "ctx_tr_"..idx_n) then
-      -- Réinitialiser le nombre de canaux à 2 à chaque ouverture
+      -- Repart de 2 canaux à chaque ouverture du menu.
       if reaper.ImGui_IsWindowAppearing(ctx) then
         state.nchan_buf = 2
       end
@@ -2685,11 +2930,10 @@ local function draw_left(all_tracks_unused)
       reaper.ImGui_AlignTextToFramePadding(ctx)
       reaper.ImGui_Text(ctx, "Channel pairs:")
       reaper.ImGui_Spacing(ctx)
-      reaper.ImGui_SetNextItemWidth(ctx, 160)
-      local ncc, ncv = reaper.ImGui_InputInt(ctx, "##nchan_"..idx_n, state.nchan_buf)
-      if ncc then state.nchan_buf = math.max(2, math.min(64, ncv)) end
+      local ncv, ncc = int_field("nchan_"..idx_n, state.nchan_buf, 2, 64, 80)
+      if ncc then state.nchan_buf = ncv end
       reaper.ImGui_SameLine(ctx, 0, 8)
-      if reaper.ImGui_Button(ctx, "  OK  ##nchan_ok_"..idx_n) then
+      if btn("  OK  ##nchan_ok_"..idx_n) then
         local targets = targets_for(t)
         local new_nchan = state.nchan_buf
         -- Vérifier les conflits avec les sends existants
@@ -2697,7 +2941,7 @@ local function draw_left(all_tracks_unused)
         for _, st in ipairs(targets) do
           if reaper.ValidatePtr(st, "MediaTrack*") then
             local tname_st = tname(st)
-            -- Sends sortants : vérifier I_SRCCHAN
+            -- Vérifie les canaux des envois sortants.
             for i = 0, reaper.GetTrackNumSends(st, 0) - 1 do
               local sc = math.floor(reaper.GetTrackSendInfo_Value(st, 0, i, "I_SRCCHAN")) & ~1024
               local pair = math.floor(sc / 2) + 1
@@ -2709,7 +2953,7 @@ local function draw_left(all_tracks_unused)
                   '"%s" → "%s" : src ch %d-%d', tname_st, dname, sc+1, sc+2)
               end
             end
-            -- Receives entrants : vérifier I_DSTCHAN
+            -- Vérifie les canaux des retours entrants.
             for i = 0, reaper.GetTrackNumSends(st, -1) - 1 do
               local dc = math.floor(reaper.GetTrackSendInfo_Value(st, -1, i, "I_DSTCHAN"))
               if dc + 2 > new_nchan then
@@ -2762,34 +3006,30 @@ local function draw_left(all_tracks_unused)
     local is_folder_tr = reaper.GetMediaTrackInfo_Value(t, "I_FOLDERDEPTH") == 1
     reaper.ImGui_SameLine(ctx, 0, 4)
     if is_folder_tr then
-      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        0xAA5500FF)
-      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xCC6600FF)
-      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),          C.white)
-      if reaper.ImGui_Button(ctx, "D##dis_"..idx_n, 22, 22) then
+      if icon_btn("dis_"..idx_n, "D", 22, 22, C.white, 0xAA5500FF, 0xCC6600FF) then
         action_dissolve_folder(t)
         state.sel_tracks      = {}
         state.focused_track   = nil
         state.last_proj_state = -1
       end
-      reaper.ImGui_PopStyleColor(ctx, 3)
+      if reaper.ImGui_IsItemHovered(ctx) then reaper.ImGui_SetTooltip(ctx, "Dissolve folder") end
     else
       reaper.ImGui_Dummy(ctx, 22, 22)
     end
 
     -- Bouton IO (ouvre le routing REAPER de la piste)
     reaper.ImGui_SameLine(ctx, 0, 4)
-    if reaper.ImGui_Button(ctx, "IO##io_l"..idx_n, 24, 22) then
+    if icon_btn("io_l"..idx_n, "IO", 24, 22, C.text) then
       action_open_io(t)
     end
+    if reaper.ImGui_IsItemHovered(ctx) then reaper.ImGui_SetTooltip(ctx, "Routing / IO") end
 
     -- Bouton MS
     reaper.ImGui_SameLine(ctx, 0, 4)
     local ms_on = reaper.GetMediaTrackInfo_Value(t, "B_MAINSEND") == 1
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),
-      ms_on and C.bg_item or C.danger)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),
-      ms_on and C.text_dim or 0xFF9999FF)
-    if reaper.ImGui_Button(ctx, "MS##ms_"..idx_n, 26, 22) then
+    if icon_btn("ms_"..idx_n, "MS", 26, 22,
+        ms_on and C.text_dim or 0xFF9999FF,
+        ms_on and C.bg_item or C.danger) then
       local new_val = ms_on and 0 or 1
       local targets = targets_for(t)
       for _, st in ipairs(targets) do
@@ -2799,14 +3039,13 @@ local function draw_left(all_tracks_unused)
       end
       state.last_proj_state = -1
     end
-    reaper.ImGui_PopStyleColor(ctx, 2)
+    if reaper.ImGui_IsItemHovered(ctx) then
+      reaper.ImGui_SetTooltip(ctx, ms_on and "Master send: on" or "Master send: off")
+    end
 
     -- Bouton supprimer piste
     reaper.ImGui_SameLine(ctx, 0, 4)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        C.danger)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), C.danger_hov)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(),          C.white)
-    if reaper.ImGui_Button(ctx, "X##del_tr_"..idx_n, 22, 22) then
+    if icon_btn("del_tr_"..idx_n, "X", 22, 22, C.white, C.danger, C.danger_hov) then
       local targets = targets_for(t)
       state.confirm_delete = {
         ptrs = { table.unpack(targets) },
@@ -2816,7 +3055,7 @@ local function draw_left(all_tracks_unused)
       }
       reaper.ImGui_OpenPopup(ctx, "confirm_del_track")
     end
-    reaper.ImGui_PopStyleColor(ctx, 3)
+    if reaper.ImGui_IsItemHovered(ctx) then reaper.ImGui_SetTooltip(ctx, "Delete track") end
   end
 
   -- Popup de confirmation suppression
@@ -2832,7 +3071,7 @@ local function draw_left(all_tracks_unused)
     reaper.ImGui_Spacing(ctx)
     if col_btn("Delete##conf_del", C.danger, C.danger_hov) then
       if cd and cd.ptrs then
-        -- Différer la suppression (de bas en haut pour éviter les décalages)
+        -- La suppression est reportée juste après l'affichage.
         state.pending_deletes = {}
         for _, ptr in ipairs(cd.ptrs) do
           if reaper.ValidatePtr(ptr, "MediaTrack*") then
@@ -2847,7 +3086,7 @@ local function draw_left(all_tracks_unused)
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
     reaper.ImGui_SameLine(ctx, 0, 8)
-    if reaper.ImGui_Button(ctx, "Cancel##conf_del_no") then
+    if btn("Cancel##conf_del_no") then
       state.confirm_delete = nil
       reaper.ImGui_CloseCurrentPopup(ctx)
     end
@@ -2905,13 +3144,13 @@ local function draw_right(all_tracks)
     reaper.ImGui_Text(ctx, nb .. " tracks selected")
     reaper.ImGui_PopStyleColor(ctx, 1)
   end
-  reaper.ImGui_Separator(ctx)
   reaper.ImGui_Spacing(ctx)
+  section_divider()
 
   panel_sends(all_tracks)
-  reaper.ImGui_Separator(ctx) ; reaper.ImGui_Spacing(ctx)
+  section_divider()
   panel_receives(all_tracks)
-  reaper.ImGui_Separator(ctx) ; reaper.ImGui_Spacing(ctx)
+  section_divider()
   panel_vca()
 
   reaper.ImGui_EndChild(ctx)
@@ -2934,7 +3173,8 @@ end
 --  BOUCLE
 -- ============================================================
 local function loop()
-  -- Exécute la suppression différée AVANT tout accès aux pointeurs de pistes
+  -- Les suppressions demandées à l'affichage précédent sont exécutées ici,
+  -- avant toute lecture des pistes.
   if state.pending_delete then
     local ptr = state.pending_delete
     state.pending_delete = nil
@@ -2958,13 +3198,13 @@ local function loop()
     state.last_proj_state = -1
     state.last_sel_count  = -1
     reaper.defer(loop)
-    return  -- repart sur un frame propre
+    return  -- on repart proprement à l'affichage suivant
   end
 
   if state.pending_deletes and #state.pending_deletes > 0 then
     local ptrs = state.pending_deletes
     state.pending_deletes = nil
-    -- Trier par index décroissant pour éviter les décalages
+    -- On supprime de la dernière piste vers la première.
     table.sort(ptrs, function(a, b)
       local ia = reaper.ValidatePtr(a, "MediaTrack*") and
                  math.floor(reaper.GetMediaTrackInfo_Value(a, "IP_TRACKNUMBER")) or 0
@@ -3011,18 +3251,19 @@ local function loop()
   local nc, nv = push_style()
 
   reaper.ImGui_SetNextWindowSize(ctx, WIN_W, WIN_H, reaper.ImGui_Cond_FirstUseEver())
-  reaper.ImGui_SetNextWindowSizeConstraints(ctx, 680, 500, 9999, 9999)
+  reaper.ImGui_SetNextWindowSizeConstraints(ctx, 960, 500, 9999, 9999)
 
   local vis, open = reaper.ImGui_Begin(ctx, SCRIPT_NAME, true,
     reaper.ImGui_WindowFlags_NoCollapse())
 
   if vis then
-    -- Statut en bas : on le rend d'abord pour mesurer sa hauteur,
-    -- puis on utilise GetContentRegionAvail pour les colonnes
+    reaper.ImGui_PushFont(ctx, font, 14)
+
+    -- La barre de statut occupe le bas ; les colonnes remplissent le reste.
     local avail_w, avail_h = reaper.ImGui_GetContentRegionAvail(ctx)
     local status_h = 36  -- separator + text + padding
 
-    -- Colonnes dans un child de hauteur = avail_h - status_h
+    -- Zone des deux colonnes, au-dessus de la barre de statut.
     local cols_ok = reaper.ImGui_BeginChild(ctx, "cols", 0, avail_h - status_h, 0)
     if cols_ok then
       draw_left()
@@ -3032,6 +3273,8 @@ local function loop()
     reaper.ImGui_EndChild(ctx)
 
     draw_status()
+
+    reaper.ImGui_PopFont(ctx)
   end
 
   reaper.ImGui_End(ctx)
