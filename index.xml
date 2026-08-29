@@ -112,6 +112,12 @@ Track names in SENDS and RECEIVES are now the same white colour in both sections
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Routing%20Hub.lua</source>
       </version>
     </reapack>
+    <reapack name="SK AW Console Builder.lua" type="script" desc="SK AW Console Builder : Airwindows Console Channel/Bus summing system builder">
+      <version name="1.0" author="Studio Kozak" time="2026-08-29T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20AW%20Console%20Builder.lua</source>
+        <changelog><![CDATA[Initial release. Automates building an Airwindows Console (Channel + Bus) summing system around selected tracks: creates a SUMMING track sized to the selection, routes each source track to its channel pair, inserts and pins a Console Channel instance per track, then inserts a single Console Bus instance on the SUMMING track with pins mapped to sum all channel pairs. Left panel lists all project tracks with checkboxes that mirror REAPER's native track selection, plus a per-track visibility toggle for TCP/MCP.]]></changelog>
+      </version>
+    </reapack>
     <reapack name="SK Scripts Organizer.lua" type="script" desc="SK Scripts Organizer : Categorized launcher to organize and run all your ReaScripts">
       <version name="1.0" author="Studio Kozak" time="2026-06-19T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Scripts%20Organizer.lua</source>
