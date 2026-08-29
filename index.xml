@@ -77,16 +77,11 @@ The pattern being worked on is kept with the project, so closing the window no l
     </reapack>
   </category>
   <category name="Tools">
-    <reapack name="SK Cue Bus Manager_FR.lua" type="script" desc="SK Cue Bus Manager : Headphone monitoring console with VU-meters and routing (FR)">
-      <version name="1.4" author="Studio Kozak" time="2026-07-27T00:00:00Z">
-        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Cue%20Bus%20Manager_FR.lua</source>
-        <changelog><![CDATA[New Studio Kozak graphical interface.]]></changelog>
-      </version>
-      <version name="1.3" author="Studio Kozak" time="2026-03-20T00:00:00Z">
-        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Cue%20Bus%20Manager_FR.lua</source>
-      </version>
-    </reapack>
     <reapack name="SK Cue Bus Manager_EN.lua" type="script" desc="SK Cue Bus Manager : Headphone monitoring console with VU-meters and routing (EN)">
+      <version name="1.5" author="Studio Kozak" time="2026-08-29T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Cue%20Bus%20Manager_EN.lua</source>
+        <changelog><![CDATA[Complete interface overhaul, plus new features including drag-and-drop-style track reordering in the mix view.]]></changelog>
+      </version>
       <version name="1.4" author="Studio Kozak" time="2026-07-27T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Cue%20Bus%20Manager_EN.lua</source>
         <changelog><![CDATA[New Studio Kozak graphical interface.]]></changelog>
@@ -101,6 +96,14 @@ The pattern being worked on is kept with the project, so closing the window no l
       </version>
     </reapack>
     <reapack name="SK Routing Hub.lua" type="script" desc="SK Routing Hub : Comprehensive routing management tool">
+      <version name="2.1" author="Studio Kozak" time="2026-08-29T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Routing%20Hub.lua</source>
+        <changelog><![CDATA[Added a "SK ROUTING HUB" title to the toolbar, in the same style as the other Studio Kozak scripts.
+The track channel count menu (right-click a track) now only works in steps of 2, defaults to that track's current channel count instead of always resetting to 2, and is only available when a single track is selected.
+The Color picker is now its own always-on-top window instead of a popup: it stays open while you select different tracks and paint them, and only closes when you click its own close button.
+Added tooltips on the Mute, Phase and Mono buttons in the New Send / New Receive windows, and a "Go to <track>" tooltip when hovering a track name in the SENDS/RECEIVES lists. Tooltips now have an opaque background and a border so they stay readable over the window behind them.
+Track names in SENDS and RECEIVES are now the same white colour in both sections.]]></changelog>
+      </version>
       <version name="2.0" author="Studio Kozak" time="2026-08-22T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Routing%20Hub.lua</source>
         <changelog><![CDATA[Reworked interface. New RECEIVES section with a + New receive button to route other tracks into the selected ones in one step.]]></changelog>
