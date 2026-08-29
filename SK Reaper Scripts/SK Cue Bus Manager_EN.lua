@@ -24,7 +24,7 @@ end
 local CFG = {
   SCRIPT_NAME = "SK Cue Bus Manager",
   VERSION     = "1.4",
-  WINDOW_W    = 1200,
+  WINDOW_W    = 1100,
   WINDOW_H    = 640,
   SIDEBAR_W   = 200,
   AVAIL_W     = 240,
@@ -151,6 +151,18 @@ end
 -- REAPER native color → RGBA ImGui conversion
 local function native_to_imgui(native)
   local r, g, b = reaper.ColorFromNative(native)
+  return (r << 24) | (g << 16) | (b << 8) | 0xFF
+end
+
+-- Lightens an 0xRRGGBBAA color toward white by amt (0..1), for hover/active
+-- button variants derived from a track's color.
+local function lighten(col, amt)
+  local r = (col >> 24) & 0xFF
+  local g = (col >> 16) & 0xFF
+  local b = (col >> 8)  & 0xFF
+  r = math.min(255, math.floor(r + (255 - r) * amt))
+  g = math.min(255, math.floor(g + (255 - g) * amt))
+  b = math.min(255, math.floor(b + (255 - b) * amt))
   return (r << 24) | (g << 16) | (b << 8) | 0xFF
 end
 
@@ -468,6 +480,67 @@ function RoutingEngine:set_hw_out(cue_guid, ch_l)
 end
 
 -- =============================================================================
+--  DISPLAY ORDER
+--  Per-cue, script-only ordering of the track strips shown in the mix area.
+--  Purely cosmetic — it never touches track order in REAPER itself. Persisted
+--  on the cue bus track via P_EXT, the same mechanism used for snapshots.
+-- =============================================================================
+
+local function get_display_order(cue)
+  local raw = get_ext(cue.track, "SK_CBM_ORDER")
+  if not raw or raw == "" then return {} end
+  local order = {}
+  for guid in raw:gmatch("[^;]+") do order[#order+1] = guid end
+  return order
+end
+
+local function save_display_order(cue, ordered_srcs)
+  local parts = {}
+  for _, src in ipairs(ordered_srcs) do parts[#parts+1] = src.guid end
+  set_ext(cue.track, "SK_CBM_ORDER", table.concat(parts, ";"))
+end
+
+-- model:sources_in_cue's list, re-ordered per the cue's saved display order.
+-- Tracks with no saved position (newly added) are appended at the end, in
+-- their REAPER track order.
+local function ordered_sources_in_cue(cue, routing, model)
+  local raw = model:sources_in_cue(cue.guid, routing)
+  local order = get_display_order(cue)
+  if #order == 0 then return raw end
+
+  local by_guid = {}
+  for _, src in ipairs(raw) do by_guid[src.guid] = src end
+
+  local result, seen = {}, {}
+  for _, guid in ipairs(order) do
+    local src = by_guid[guid]
+    if src then
+      result[#result+1] = src
+      seen[guid] = true
+    end
+  end
+  for _, src in ipairs(raw) do
+    if not seen[src.guid] then result[#result+1] = src end
+  end
+  return result
+end
+
+-- Swaps a track with its left/right neighbor in the cue's display order and
+-- persists the result. direction: -1 = left, 1 = right.
+local function move_track_in_cue(cue, routing, model, src_guid, direction)
+  local ordered = ordered_sources_in_cue(cue, routing, model)
+  local idx = nil
+  for i, src in ipairs(ordered) do
+    if src.guid == src_guid then idx = i; break end
+  end
+  if not idx then return end
+  local swap_idx = idx + direction
+  if swap_idx < 1 or swap_idx > #ordered then return end
+  ordered[idx], ordered[swap_idx] = ordered[swap_idx], ordered[idx]
+  save_display_order(cue, ordered)
+end
+
+-- =============================================================================
 --  CUE MANAGER
 --  Creation, deletion, duplication, renaming of cue buses.
 -- =============================================================================
@@ -579,6 +652,14 @@ function CueManager:duplicate_cue_bus(src_cue_guid)
   local new_guid = self:create_cue_bus(src_cue.name.." (copy)")
   local new_cue  = self.model.cue_buses[new_guid]
   if new_cue then
+    -- Carry over the source cue's color, so the copy isn't left uncolored
+    -- (which also threw off the sidebar row alignment — no color meant no
+    -- swatch dot, so the mute button sat one slot to the left).
+    local native_col = reaper.GetTrackColor(src_cue.track)
+    if native_col ~= 0 then
+      reaper.SetMediaTrackInfo_Value(new_cue.track, "I_CUSTOMCOLOR", native_col)
+      set_ext(new_cue.track, "SK_CBM_COLOR", get_ext(src_cue.track, "SK_CBM_COLOR"))
+    end
     for _, src in ipairs(self.model.sources) do
       local old_idx = self.routing:find_send(src.track, src_cue.track)
       if old_idx >= 0 then
@@ -788,21 +869,22 @@ local function set_status(msg)
   UI.status_time = reaper.time_precise()
 end
 
--- Global volume and mute for a cue (independent of individual faders)
+-- Global volume, pan and mute for a cue (independent of individual faders)
 local function get_cue_master(cue_guid)
   if not UI.cue_master[cue_guid] then
-    UI.cue_master[cue_guid] = { vol = 1.0, muted = false }
+    UI.cue_master[cue_guid] = { vol = 1.0, pan = 0.0, muted = false }
   end
   return UI.cue_master[cue_guid]
 end
 
--- Applies global volume and mute directly on the cue bus track
+-- Applies global volume, pan and mute directly on the cue bus track
 local function apply_cue_master(cue_guid, model)
   local m   = get_cue_master(cue_guid)
   local cue = model.cue_buses[cue_guid]
   if not cue or not valid_track(cue.track) then return end
   reaper.SetMediaTrackInfo_Value(cue.track, "B_MUTE", m.muted and 1 or 0)
   reaper.SetMediaTrackInfo_Value(cue.track, "D_VOL",  m.vol)
+  reaper.SetMediaTrackInfo_Value(cue.track, "D_PAN",  m.pan)
 end
 
 -- =============================================================================
@@ -910,6 +992,488 @@ local function draw_vu_meter(ctx, track, h, vol, pan, muted, src_guid)
   reaper.ImGui_DrawList_AddLine(dl, cx, y_0db, cx+total_w, y_0db, rgba(0x8C877880), 1)
 
   reaper.ImGui_Dummy(ctx, total_w, h)
+end
+
+-- =============================================================================
+--  FADER STRIP — HARDWARE-STYLE WIDGETS
+--  Ported from SK Bus Console: DrawList-based fader (groove + tick marks + cap)
+--  and a rotary pan knob, replacing the native ImGui slider / knob previously
+--  used per strip. Functionality (routing, mute, VU, remove) is unchanged —
+--  only the look and feel of the strip header, fader and pan control.
+-- =============================================================================
+
+local FADER_DB_MIN, FADER_DB_MAX = -60.0, 12.0
+local HAS_SLIDER = reaper.DB2SLIDER and reaper.SLIDER2DB
+
+local FADER_COL_GROOVE    = 0x141412FF
+local FADER_COL_GROOVE_DK = 0x0A0A09FF
+local FADER_COL_CAP_EDGE  = 0x000000FF
+local FADER_COL_BEVEL_HI  = 0xFFFFFF22
+local FADER_COL_BEVEL_LO  = 0x00000066
+local FADER_COL_TICK      = 0x55504955
+local FADER_COL_TICK_0    = 0xD9A44188
+local KNOB_COL_BODY       = 0x33332FFF
+local KNOB_COL_EDGE       = 0x000000FF
+
+local STRIP_HDR_H   = 22
+local ARROW_ROW_H   = 12
+
+local function gain_to_db(g)
+  if g <= 0 then return -150.0 end
+  return 20.0 * math.log(g, 10)
+end
+
+local function gain_to_norm(g)
+  if HAS_SLIDER then return clamp(reaper.DB2SLIDER(gain_to_db(g)) / 1000.0, 0.0, 1.0) end
+  local db = clamp(gain_to_db(g), FADER_DB_MIN, FADER_DB_MAX)
+  return (db - FADER_DB_MIN) / (FADER_DB_MAX - FADER_DB_MIN)
+end
+
+local function norm_to_gain(n)
+  local db
+  if HAS_SLIDER then db = reaper.SLIDER2DB(n * 1000.0)
+  else db = FADER_DB_MIN + n * (FADER_DB_MAX - FADER_DB_MIN) end
+  if db <= -150.0 then return 0.0 end
+  return 10.0 ^ (db / 20.0)
+end
+
+local FADER_DEFAULT_NORM = gain_to_norm(1.0)
+
+local function text_on(col)
+  local r = (col >> 24) & 0xFF
+  local g = (col >> 16) & 0xFF
+  local b = (col >> 8) & 0xFF
+  local lum = 0.299 * r + 0.587 * g + 0.114 * b
+  return lum > 140 and CFG.COL.INK or CFG.COL.TEXT_BRIGHT
+end
+
+-- Drag state for the custom widgets, held while the mouse button is down so
+-- the widget follows the cursor instead of snapping back to the live value.
+local drag_hold = {}
+
+local function fine_drag(ctx)
+  if reaper.ImGui_GetKeyMods and reaper.ImGui_Mod_Ctrl then
+    return (reaper.ImGui_GetKeyMods(ctx) & reaper.ImGui_Mod_Ctrl()) ~= 0
+  end
+  return false
+end
+
+-- Colored header bar (track color) with a centered, clipped name and a small
+-- remove button in the top-right corner. Returns true the frame the remove
+-- button is clicked. `w` is the strip's actual usable content width (already
+-- net of the child window's padding).
+local function sk_strip_header(ctx, dl, w, native_col, name, show_remove)
+  local cx, cy = reaper.ImGui_GetCursorScreenPos(ctx)
+  local hdr = native_col ~= 0 and native_to_imgui(native_col) or rgba(CFG.COL.STRIP_SEL)
+  reaper.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + w, cy + STRIP_HDR_H, hdr, 3)
+  local tcol = text_on(hdr)
+  local label_r = show_remove and (cx + w - 22) or (cx + w - 4)
+  reaper.ImGui_DrawList_PushClipRect(dl, cx + 4, cy, label_r, cy + STRIP_HDR_H, true)
+  local tw, th = reaper.ImGui_CalcTextSize(ctx, name)
+  local label_w = label_r - (cx + 4)
+  local tx = cx + 4 + math.max(0, (label_w - tw) * 0.5)
+  reaper.ImGui_DrawList_AddText(dl, tx, cy + (STRIP_HDR_H - th) * 0.5, rgba(tcol), name)
+  reaper.ImGui_DrawList_PopClipRect(dl)
+
+  local removed = false
+  if show_remove then
+    local bw, bh = 16, 16
+    local bx, by = cx + w - bw - 3, cy + (STRIP_HDR_H - bh) * 0.5
+    reaper.ImGui_SetCursorScreenPos(ctx, bx, by)
+    reaper.ImGui_InvisibleButton(ctx, '##rm', bw, bh)
+    local hovered = reaper.ImGui_IsItemHovered(ctx)
+    if reaper.ImGui_IsItemClicked(ctx) then removed = true end
+    local fill = hovered and rgba(CFG.COL.DANGER_H) or rgba(CFG.COL.DANGER)
+    reaper.ImGui_DrawList_AddRectFilled(dl, bx, by, bx+bw, by+bh, fill, 3)
+    reaper.ImGui_DrawList_AddRect(dl, bx, by, bx+bw, by+bh, rgba(0x000000AA), 3, 0, 1)
+    reaper.ImGui_DrawList_AddLine(dl, bx+4, by+4, bx+bw-4, by+bh-4, rgba(0xFFFFFFFF), 1.6)
+    reaper.ImGui_DrawList_AddLine(dl, bx+bw-4, by+4, bx+4, by+bh-4, rgba(0xFFFFFFFF), 1.6)
+    if hovered then
+      reaper.ImGui_SetTooltip(ctx, "Remove from this headphone mix")
+    end
+  end
+
+  reaper.ImGui_SetCursorScreenPos(ctx, cx, cy)
+  reaper.ImGui_Dummy(ctx, w, STRIP_HDR_H)
+  return removed
+end
+
+-- Vertical fader: groove + dB tick marks + beveled cap. Drag to change,
+-- Ctrl+drag for fine adjustment, double-click to reset to 0 dB.
+local function sk_fader(ctx, dl, id, w, h, norm, cap_col, accent_col)
+  local x, y = reaper.ImGui_GetCursorScreenPos(ctx)
+  local cx = x + w * 0.5
+  local cap_h = 20
+  local travel = h - cap_h
+
+  reaper.ImGui_DrawList_AddRectFilled(dl, cx - 3, y, cx + 3, y + h, rgba(FADER_COL_GROOVE), 2)
+  reaper.ImGui_DrawList_AddLine(dl, cx, y + 2, cx, y + h - 2, rgba(FADER_COL_GROOVE_DK), 1)
+
+  local ticks = { 12, 6, 0, -6, -12, -24, -48 }
+  for _, db in ipairs(ticks) do
+    local tn
+    if HAS_SLIDER then tn = clamp(reaper.DB2SLIDER(db) / 1000.0, 0, 1)
+    else tn = clamp((db - FADER_DB_MIN) / (FADER_DB_MAX - FADER_DB_MIN), 0, 1) end
+    local ty = y + (1 - tn) * travel + cap_h * 0.5
+    local c = (db == 0) and FADER_COL_TICK_0 or FADER_COL_TICK
+    reaper.ImGui_DrawList_AddLine(dl, x + 1, ty, x + 5, ty, rgba(c), 1)
+    reaper.ImGui_DrawList_AddLine(dl, x + w - 5, ty, x + w - 1, ty, rgba(c), 1)
+  end
+
+  reaper.ImGui_InvisibleButton(ctx, '##fad' .. id, w, h)
+  local changed = false
+  if reaper.ImGui_IsItemActivated(ctx) then drag_hold[id] = norm end
+  if reaper.ImGui_IsItemActive(ctx) then
+    local held = drag_hold[id] or norm
+    local _, dy = reaper.ImGui_GetMouseDelta(ctx)
+    if dy ~= 0 then
+      local scale = fine_drag(ctx) and 0.25 or 1.0
+      held = clamp(held - (dy / travel) * scale, 0, 1)
+      drag_hold[id] = held
+      changed = true
+    end
+    norm = held
+  else
+    drag_hold[id] = nil
+  end
+  if reaper.ImGui_IsItemHovered(ctx) and reaper.ImGui_IsMouseDoubleClicked(ctx, 0) then
+    norm = FADER_DEFAULT_NORM; drag_hold[id] = nil; changed = true
+  end
+
+  local cap_y = y + (1 - norm) * travel
+  local x1, x2 = x + 2, x + w - 2
+  reaper.ImGui_DrawList_AddRectFilled(dl, x1, cap_y, x2, cap_y + cap_h, rgba(cap_col), 3)
+  reaper.ImGui_DrawList_AddRect(dl, x1, cap_y, x2, cap_y + cap_h, rgba(FADER_COL_CAP_EDGE), 3, 0, 1)
+  reaper.ImGui_DrawList_AddLine(dl, x1 + 1, cap_y + 1, x2 - 1, cap_y + 1, rgba(FADER_COL_BEVEL_HI), 1)
+  reaper.ImGui_DrawList_AddLine(dl, x1 + 1, cap_y + cap_h - 1, x2 - 1, cap_y + cap_h - 1, rgba(FADER_COL_BEVEL_LO), 1)
+  reaper.ImGui_DrawList_AddLine(dl, x1 + 2, cap_y + cap_h * 0.5, x2 - 2, cap_y + cap_h * 0.5, rgba(accent_col), 2)
+
+  return norm, changed
+end
+
+-- Rotary pan knob. Drag vertically to change, Ctrl+drag for fine adjustment,
+-- double-click to reset to center.
+local function sk_pan_knob(ctx, dl, id, d, pan, accent_col)
+  local x, y = reaper.ImGui_GetCursorScreenPos(ctx)
+  local cx, cy = x + d * 0.5, y + d * 0.5
+  local r = d * 0.5
+  local key = id .. '#p'
+
+  reaper.ImGui_DrawList_AddCircleFilled(dl, cx, cy, r, rgba(KNOB_COL_BODY), 28)
+  reaper.ImGui_DrawList_AddCircle(dl, cx, cy, r, rgba(KNOB_COL_EDGE), 28, 1)
+  reaper.ImGui_DrawList_AddCircle(dl, cx, cy, r - 1, rgba(FADER_COL_BEVEL_HI), 28, 1)
+
+  reaper.ImGui_InvisibleButton(ctx, '##pan' .. id, d, d)
+  local changed = false
+  if reaper.ImGui_IsItemActivated(ctx) then drag_hold[key] = pan end
+  if reaper.ImGui_IsItemActive(ctx) then
+    local held = drag_hold[key] or pan
+    local _, dy = reaper.ImGui_GetMouseDelta(ctx)
+    if dy ~= 0 then
+      local scale = fine_drag(ctx) and 0.0025 or 0.01
+      held = clamp(held - dy * scale, -1, 1)
+      drag_hold[key] = held
+      changed = true
+    end
+    pan = held
+  else
+    drag_hold[key] = nil
+  end
+  if reaper.ImGui_IsItemHovered(ctx) and reaper.ImGui_IsMouseDoubleClicked(ctx, 0) then
+    pan = 0.0; drag_hold[key] = nil; changed = true
+  end
+
+  local a_min, a_max = math.rad(-135), math.rad(135)
+  local ang = a_min + ((pan + 1) * 0.5) * (a_max - a_min)
+  local px = cx + math.sin(ang) * (r - 3)
+  local py = cy - math.cos(ang) * (r - 3)
+  reaper.ImGui_DrawList_AddLine(dl, cx, cy, px, py, rgba(accent_col), 2)
+  reaper.ImGui_DrawList_AddCircleFilled(dl, cx, cy, 2, rgba(accent_col), 8)
+
+  return pan, changed
+end
+
+-- Direct dB entry, independent of the fader's display curve: values below
+-- -130 dB are treated as -inf (silence), and the entry is capped at +12 dB.
+local function db_to_gain(db)
+  if db < -130.0 then return 0.0 end
+  return 10.0 ^ (math.min(db, FADER_DB_MAX) / 20.0)
+end
+
+-- Right-click popup on a fader: numeric dB entry with -/+ stepper buttons
+-- (matching the SK Routing Hub stepper), replacing a plain context menu.
+local db_popup_buf = {}
+
+local function draw_db_entry_popup(ctx, popup_id, current_gain, on_apply)
+  if reaper.ImGui_BeginPopupContextItem(ctx, popup_id) then
+    if reaper.ImGui_IsWindowAppearing(ctx) then
+      db_popup_buf[popup_id] = math.min(gain_to_db(current_gain), FADER_DB_MAX)
+    end
+    local val = db_popup_buf[popup_id] or 0.0
+
+    if reaper.ImGui_Button(ctx, "-##dbminus"..popup_id, 20, 0) then
+      val = math.min(val - 1.0, FADER_DB_MAX)
+      on_apply(db_to_gain(val))
+    end
+    reaper.ImGui_SameLine(ctx, 0, 4)
+    reaper.ImGui_SetNextItemWidth(ctx, 64)
+    local ch, nv = reaper.ImGui_InputDouble(ctx, "##dbval"..popup_id, val, 0, 0, "%.1f")
+    if ch then
+      val = math.min(nv, FADER_DB_MAX)
+      on_apply(db_to_gain(val))
+    end
+    reaper.ImGui_SameLine(ctx, 0, 4)
+    if reaper.ImGui_Button(ctx, "+##dbplus"..popup_id, 20, 0) then
+      val = math.min(val + 1.0, FADER_DB_MAX)
+      on_apply(db_to_gain(val))
+    end
+
+    db_popup_buf[popup_id] = val
+    reaper.ImGui_EndPopup(ctx)
+  end
+end
+
+-- =============================================================================
+--  FADER STRIP (one per track in the mix)
+-- =============================================================================
+
+local function draw_fader_strip(ctx, cue_guid, src, routing, fader_h, on_remove, can_left, can_right, on_move)
+  local vol   = routing:get_vol(cue_guid, src)
+  local pan   = routing:get_pan(cue_guid, src)
+  local muted = routing:get_mute(cue_guid, src)
+  local sid   = cue_guid..src.guid
+
+  -- Track color is used for the header AND the fader cap, so the cursor
+  -- matches the track name's color; the accent line auto-contrasts against
+  -- the cap color so it stays visible whatever the hue. The strip body stays
+  -- neutral, as in SK Bus Console.
+  local track_col  = valid_track(src.track) and reaper.GetTrackColor(src.track) or 0
+  local col_bg     = muted and rgba(CFG.COL.STRIP_MUTED) or rgba(CFG.COL.STRIP_BG)
+  local cap_native = track_col ~= 0 and native_to_imgui(track_col) or 0x4A4A44FF
+  local col_fader_cap
+  if muted then
+    local r = (cap_native >> 24) & 0xFF
+    local g = (cap_native >> 16) & 0xFF
+    local b = (cap_native >> 8) & 0xFF
+    col_fader_cap = rgba((math.floor(r*0.4+20)<<24)|(math.floor(g*0.4+20)<<16)|(math.floor(b*0.4+20)<<8)|0xFF)
+  else
+    col_fader_cap = rgba(cap_native)
+  end
+  local col_accent = muted and rgba(CFG.COL.TEXT_DIM) or rgba(text_on(cap_native))
+
+  local strip_h = fader_h + 150 + ARROW_ROW_H
+  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ChildBg(), col_bg)
+  if reaper.ImGui_BeginChild(ctx, "strip"..sid, strip_w(), strip_h, 1,
+      reaper.ImGui_WindowFlags_NoScrollbar() |
+      reaper.ImGui_WindowFlags_NoScrollWithMouse()) then
+
+    local dl = reaper.ImGui_GetWindowDrawList(ctx)
+
+    -- Header: track-colored bar with clipped name + remove button
+    local name = src.name
+    local max_chars = math.max(4, math.floor((strip_w() - 26) / 7))
+    if #name > max_chars then name = name:sub(1, max_chars - 1).."~" end
+    local removed = sk_strip_header(ctx, dl, strip_w() - 12, track_col, name, on_remove ~= nil)
+    if removed and on_remove then on_remove() end
+    if reaper.ImGui_IsItemHovered(ctx) and #src.name > max_chars then
+      reaper.ImGui_SetTooltip(ctx, src.name)
+    end
+
+    -- Pan knob, centered
+    local knob_d = 28
+    reaper.ImGui_Spacing(ctx)
+    reaper.ImGui_SetCursorPosX(ctx, math.floor((strip_w() - knob_d) / 2))
+    local np, pch = sk_pan_knob(ctx, dl, sid, knob_d, pan, rgba(CFG.COL.ACCENT))
+    if pch then routing:set_pan(cue_guid, src, clamp(np, -1, 1)) end
+    local disp_pan = pch and np or pan
+    local pan_str = math.abs(disp_pan) < 0.01 and "C" or
+      string.format("%s%d", disp_pan < 0 and "L" or "R", math.floor(math.abs(disp_pan)*100+0.5))
+    local pan_tw = reaper.ImGui_CalcTextSize(ctx, pan_str)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
+    reaper.ImGui_SetCursorPosX(ctx, math.floor((strip_w() - pan_tw) / 2))
+    reaper.ImGui_Text(ctx, pan_str)
+    reaper.ImGui_PopStyleColor(ctx, 1)
+
+    -- Mute button
+    reaper.ImGui_Spacing(ctx)
+    local mc = muted and CFG.COL.MUTE_ON  or CFG.COL.MUTE_OFF
+    local mh = muted and CFG.COL.DANGER_H or CFG.COL.TOGGLE_OFF_HOV
+    if colored_button(ctx, muted and "MUTE" or "mute", mc, mh, CFG.COL.MUTE_ON,
+        strip_w() - 12, 22) then
+      routing:set_mute(cue_guid, src, not muted)
+    end
+    reaper.ImGui_Spacing(ctx)
+
+    -- Vertical fader + VU-meter side by side
+    local vu_w    = CFG.VU_W * 2 + CFG.VU_GAP
+    local fader_x = math.floor((strip_w() - CFG.FADER_W - vu_w - 2) / 2)
+    reaper.ImGui_SetCursorPosX(ctx, fader_x)
+    local nn, fch = sk_fader(ctx, dl, sid, CFG.FADER_W, fader_h, gain_to_norm(vol), col_fader_cap, col_accent)
+    local disp = vol
+    if fch then disp = norm_to_gain(nn); routing:set_vol(cue_guid, src, disp) end
+    draw_db_entry_popup(ctx, "vfrst"..sid, disp, function(g)
+      disp = g
+      routing:set_vol(cue_guid, src, g)
+    end)
+
+    reaper.ImGui_SameLine(ctx, 0, 2)
+    draw_vu_meter(ctx, src.track, fader_h, vol, pan, muted, src.guid)
+
+    -- Level in dB, centered below the fader
+    local dbtxt = vol_to_db(disp).." dB"
+    local dbtw  = reaper.ImGui_CalcTextSize(ctx, dbtxt)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
+    reaper.ImGui_SetCursorPosX(ctx, math.floor((strip_w() - dbtw) / 2))
+    reaper.ImGui_Text(ctx, dbtxt)
+    reaper.ImGui_PopStyleColor(ctx, 1)
+
+    -- Reorder arrows, in their own row below the dB value, spread to the
+    -- strip's edges (left arrow near the left edge, right arrow near the
+    -- right edge). Both triangles use the same vertex winding order
+    -- (mirrored, not just swapped) so ImGui's anti-aliased fill renders
+    -- them at identical size. Both use the SAME captured row_y (SetCursorPos,
+    -- not SetCursorPosX) so the right arrow isn't pushed down onto the next
+    -- line by the left arrow's InvisibleButton auto-advancing the cursor —
+    -- that was clipping/killing the right arrow on every strip but the
+    -- first (which has no left arrow to push it down). Display order only —
+    -- never touches REAPER's track order in the project.
+    local moved_left, moved_right = false, false
+    local aw, ah = 7, 10
+    local cw = strip_w() - 12
+    local row_x, row_y = reaper.ImGui_GetCursorPos(ctx)
+
+    if can_left then
+      reaper.ImGui_SetCursorPos(ctx, 3, row_y)
+      local ax, ay = reaper.ImGui_GetCursorScreenPos(ctx)
+      ax, ay = math.floor(ax), math.floor(ay)
+      reaper.ImGui_InvisibleButton(ctx, '##dbarl'..sid, aw, ah)
+      local hov = reaper.ImGui_IsItemHovered(ctx)
+      if reaper.ImGui_IsItemClicked(ctx) then moved_left = true end
+      reaper.ImGui_DrawList_AddTriangleFilled(dl, ax+aw, ay, ax+aw, ay+ah, ax, ay+ah*0.5,
+        hov and rgba(CFG.COL.ACCENT_H) or rgba(CFG.COL.ACCENT))
+      if hov then reaper.ImGui_SetTooltip(ctx, "Move left (display only)") end
+    end
+
+    if can_right then
+      reaper.ImGui_SetCursorPos(ctx, math.max(0, cw - aw - 3), row_y)
+      local ax, ay = reaper.ImGui_GetCursorScreenPos(ctx)
+      ax, ay = math.floor(ax), math.floor(ay)
+      reaper.ImGui_InvisibleButton(ctx, '##dbarr'..sid, aw, ah)
+      local hov = reaper.ImGui_IsItemHovered(ctx)
+      if reaper.ImGui_IsItemClicked(ctx) then moved_right = true end
+      reaper.ImGui_DrawList_AddTriangleFilled(dl, ax, ay+ah, ax, ay, ax+aw, ay+ah*0.5,
+        hov and rgba(CFG.COL.ACCENT_H) or rgba(CFG.COL.ACCENT))
+      if hov then reaper.ImGui_SetTooltip(ctx, "Move right (display only)") end
+    end
+
+    -- Reserve the row's height regardless of how many arrows were drawn,
+    -- so the strip's total layout height stays fixed.
+    reaper.ImGui_SetCursorPos(ctx, row_x, row_y)
+    reaper.ImGui_Dummy(ctx, cw, ARROW_ROW_H)
+    if moved_left  and on_move then on_move(-1) end
+    if moved_right and on_move then on_move(1) end
+
+    reaper.ImGui_EndChild(ctx)
+  end
+  reaper.ImGui_PopStyleColor(ctx, 1)
+end
+
+-- =============================================================================
+--  MASTER STRIP — leftmost strip in the mix, global headphone volume/pan/mute.
+--  Pan is applied directly on the cue bus track's own D_PAN.
+--  Same visual language as a track strip (header/knob/fader/dB label) but
+--  with no remove button, mirroring SK Bus Console's MASTER strip.
+-- =============================================================================
+
+local function draw_master_strip(ctx, cue, model, fader_h)
+  local master = get_cue_master(cue.guid)
+  local muted  = master.muted
+  local track_col = valid_track(cue.track) and reaper.GetTrackColor(cue.track) or 0
+
+  local col_bg        = muted and rgba(CFG.COL.STRIP_MUTED) or rgba(CFG.COL.STRIP_BG)
+  local col_fader_cap  = rgba(CFG.COL.ACCENT)
+  local col_accent     = muted and rgba(CFG.COL.TEXT_DIM) or rgba(text_on(CFG.COL.ACCENT))
+
+  local strip_h = fader_h + 150 + ARROW_ROW_H
+  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ChildBg(), col_bg)
+  if reaper.ImGui_BeginChild(ctx, "strip_master"..cue.guid, strip_w(), strip_h, 1,
+      reaper.ImGui_WindowFlags_NoScrollbar() |
+      reaper.ImGui_WindowFlags_NoScrollWithMouse()) then
+
+    local dl = reaper.ImGui_GetWindowDrawList(ctx)
+
+    -- Amber frame around the whole master strip, as in SK Bus Console
+    local wx, wy = reaper.ImGui_GetWindowPos(ctx)
+    local ww, wh = reaper.ImGui_GetWindowSize(ctx)
+    reaper.ImGui_DrawList_AddRect(dl, wx + 0.5, wy + 0.5, wx + ww - 0.5, wy + wh - 0.5,
+      rgba(CFG.COL.ACCENT), 6, 0, 1.5)
+
+    sk_strip_header(ctx, dl, strip_w() - 12, track_col, "MASTER", false)
+
+    -- Pan knob — applied directly to the cue bus track's own D_PAN
+    local knob_d = 28
+    reaper.ImGui_Spacing(ctx)
+    reaper.ImGui_SetCursorPosX(ctx, math.floor((strip_w() - knob_d) / 2))
+    local np, pch = sk_pan_knob(ctx, dl, "master"..cue.guid, knob_d, master.pan, rgba(CFG.COL.ACCENT))
+    if pch then
+      master.pan = clamp(np, -1, 1)
+      apply_cue_master(cue.guid, model)
+    end
+    local pan_str = math.abs(master.pan) < 0.01 and "C" or
+      string.format("%s%d", master.pan < 0 and "L" or "R", math.floor(math.abs(master.pan)*100+0.5))
+    local pan_tw = reaper.ImGui_CalcTextSize(ctx, pan_str)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
+    reaper.ImGui_SetCursorPosX(ctx, math.floor((strip_w() - pan_tw) / 2))
+    reaper.ImGui_Text(ctx, pan_str)
+    reaper.ImGui_PopStyleColor(ctx, 1)
+
+    -- Mute button
+    reaper.ImGui_Spacing(ctx)
+    local mc = muted and CFG.COL.MUTE_ON  or CFG.COL.MUTE_OFF
+    local mh = muted and CFG.COL.DANGER_H or CFG.COL.TOGGLE_OFF_HOV
+    if colored_button(ctx, muted and "MUTE" or "mute", mc, mh, CFG.COL.MUTE_ON,
+        strip_w() - 12, 22) then
+      master.muted = not master.muted
+      apply_cue_master(cue.guid, model)
+      set_status(master.muted and "Headphone muted." or "Headphone unmuted.")
+    end
+    if reaper.ImGui_IsItemHovered(ctx) then
+      reaper.ImGui_SetTooltip(ctx, "Mute / unmute the entire headphone mix")
+    end
+    reaper.ImGui_Spacing(ctx)
+
+    -- Fader (no VU meter — master has no single source track to meter)
+    local fader_x = math.floor((strip_w() - CFG.FADER_W) / 2)
+    reaper.ImGui_SetCursorPosX(ctx, fader_x)
+    local nn, fch = sk_fader(ctx, dl, "master"..cue.guid, CFG.FADER_W, fader_h,
+      gain_to_norm(master.vol), col_fader_cap, col_accent)
+    local disp = master.vol
+    if fch then
+      disp = norm_to_gain(nn)
+      master.vol = disp
+      apply_cue_master(cue.guid, model)
+    end
+    draw_db_entry_popup(ctx, "masterrst"..cue.guid, disp, function(g)
+      disp = g
+      master.vol = g
+      apply_cue_master(cue.guid, model)
+    end)
+
+    -- Level in dB, centered below the fader
+    local dbtxt = vol_to_db(disp).." dB"
+    local dbtw  = reaper.ImGui_CalcTextSize(ctx, dbtxt)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
+    reaper.ImGui_SetCursorPosX(ctx, math.floor((strip_w() - dbtw) / 2))
+    reaper.ImGui_Text(ctx, dbtxt)
+    reaper.ImGui_PopStyleColor(ctx, 1)
+
+    -- No reorder arrows on MASTER (it's pinned first) — reserve the same
+    -- row height so the strip's bottom still lines up with the others.
+    reaper.ImGui_Dummy(ctx, strip_w(), ARROW_ROW_H)
+
+    reaper.ImGui_EndChild(ctx)
+  end
+  reaper.ImGui_PopStyleColor(ctx, 1)
 end
 
 -- =============================================================================
@@ -1078,17 +1642,16 @@ local function draw_sidebar(ctx, cue_mgr, model)
       local is_sel = UI.selected_cue == cue.guid
       local is_ren = UI.rename_guid == cue.guid and not UI.rename_in_header
 
-      -- Cue color indicator
+      -- Cue color indicator — always reserved (a neutral dot when no color
+      -- is set) so the row stays aligned with colored cues.
       local native = reaper.GetTrackColor(cue.track)
-      if native ~= 0 then
-        local col_btn = native_to_imgui(native)
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        col_btn)
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), col_btn)
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(),  col_btn)
-        reaper.ImGui_Button(ctx, "##sb_col"..cue.guid, 8, 22)
-        reaper.ImGui_PopStyleColor(ctx, 3)
-        reaper.ImGui_SameLine(ctx, 0, 4)
-      end
+      local col_btn = native ~= 0 and native_to_imgui(native) or rgba(CFG.COL.STRIP_SEL)
+      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        col_btn)
+      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), col_btn)
+      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(),  col_btn)
+      reaper.ImGui_Button(ctx, "##sb_col"..cue.guid, 8, 22)
+      reaper.ImGui_PopStyleColor(ctx, 3)
+      reaper.ImGui_SameLine(ctx, 0, 4)
 
       -- Stronger background for the active cue
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Header(),
@@ -1179,6 +1742,15 @@ local function draw_cue_header(ctx, cue, cue_mgr, snap, model)
       UI.color_cue     = cue.guid
     end
     reaper.ImGui_PopStyleColor(ctx, 3)
+    if native == 0 then
+      -- No color chosen yet — outline the swatch so it reads as a control,
+      -- not just blank background.
+      local dl = reaper.ImGui_GetWindowDrawList(ctx)
+      local bx0, by0 = reaper.ImGui_GetItemRectMin(ctx)
+      local bx1, by1 = reaper.ImGui_GetItemRectMax(ctx)
+      reaper.ImGui_DrawList_AddRect(dl, bx0 + 0.5, by0 + 0.5, bx1 - 0.5, by1 - 0.5,
+        rgba(CFG.COL.ACCENT), 3, 0, 1.5)
+    end
     if reaper.ImGui_IsItemHovered(ctx) then
       reaper.ImGui_SetTooltip(ctx, "Change headphone color")
     end
@@ -1186,7 +1758,7 @@ local function draw_cue_header(ctx, cue, cue_mgr, snap, model)
 
     -- Color picker
     if UI.color_popover and UI.color_cue == cue.guid then
-      reaper.ImGui_SetNextWindowSize(ctx, 310, 105, reaper.ImGui_Cond_Always())
+      reaper.ImGui_SetNextWindowSize(ctx, 310, 145, reaper.ImGui_Cond_Always())
       local col_visible, col_keep = reaper.ImGui_Begin(ctx, "Couleur##colpop", true,
         reaper.ImGui_WindowFlags_NoResize() | reaper.ImGui_WindowFlags_NoScrollbar())
       if not col_keep then UI.color_popover = false end
@@ -1330,141 +1902,6 @@ local function draw_cue_header(ctx, cue, cue_mgr, snap, model)
 end
 
 -- =============================================================================
---  FADER STRIP (one per track in the mix)
--- =============================================================================
-
-local function draw_fader_strip(ctx, cue_guid, src, routing, fader_h, on_remove)
-  local vol   = routing:get_vol(cue_guid, src)
-  local pan   = routing:get_pan(cue_guid, src)
-  local muted = routing:get_mute(cue_guid, src)
-  local sid   = cue_guid..src.guid
-
-  -- Strip color derived from the track color in REAPER
-  local track_col = valid_track(src.track) and reaper.GetTrackColor(src.track) or 0
-  local has_color = track_col ~= 0
-  local col_bg, col_fader_grab, col_accent_dim
-
-  if has_color then
-    local r, g, b = reaper.ColorFromNative(track_col)
-    local br = math.floor(r * 0.18 + 26)
-    local bg_ = math.floor(g * 0.18 + 26)
-    local bb  = math.floor(b * 0.18 + 26)
-    col_bg = muted
-      and ((math.floor(r*0.10+20)<<24)|(math.floor(g*0.06+18)<<16)|(math.floor(b*0.10+22)<<8)|0xFF)
-      or  ((br<<24)|(bg_<<16)|(bb<<8)|0xFF)
-    local sat = muted and 0.45 or 0.85
-    col_fader_grab = (math.floor(r*sat+255*(1-sat)*0.3)<<24)
-                   | (math.floor(g*sat+255*(1-sat)*0.3)<<16)
-                   | (math.floor(b*sat+255*(1-sat)*0.3)<<8)
-                   | 0xFF
-    col_accent_dim = (math.floor(r*0.7+80)<<24)
-                   | (math.floor(g*0.7+80)<<16)
-                   | (math.floor(b*0.7+80)<<8)
-                   | 0xFF
-  else
-    col_bg         = muted and rgba(CFG.COL.STRIP_MUTED) or rgba(CFG.COL.STRIP_BG)
-    col_fader_grab = muted and rgba(CFG.COL.FADER_MUTED) or rgba(CFG.COL.FADER_GRAB)
-    col_accent_dim = rgba(CFG.COL.TEXT_LABEL)
-  end
-
-  local strip_h = fader_h + 130
-  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ChildBg(), col_bg)
-  if reaper.ImGui_BeginChild(ctx, "strip"..sid, strip_w(), strip_h, 1,
-      reaper.ImGui_WindowFlags_NoScrollbar() |
-      reaper.ImGui_WindowFlags_NoScrollWithMouse()) then
-
-    -- Remove button + track name
-    local name = src.name
-    -- Truncate the name to the available strip width
-    local max_chars = math.max(4, math.floor((strip_w() - 22) / 7))
-    if #name > max_chars then name = name:sub(1, max_chars - 1).."~" end
-    if on_remove then
-      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        rgba(CFG.COL.REM_BTN))
-      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), rgba(CFG.COL.REM_HOV))
-      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(),  rgba(CFG.COL.DANGER))
-      reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FramePadding(), 0, 0)
-      if reaper.ImGui_Button(ctx, "x##rem"..sid, 16, 16) then on_remove() end
-      reaper.ImGui_PopStyleVar(ctx, 1)
-      reaper.ImGui_PopStyleColor(ctx, 3)
-      if reaper.ImGui_IsItemHovered(ctx) then
-        reaper.ImGui_SetTooltip(ctx, "Remove "..src.name.." from this headphone mix")
-      end
-      reaper.ImGui_SameLine(ctx, 0, 3)
-    end
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), col_accent_dim)
-    reaper.ImGui_Text(ctx, name)
-    reaper.ImGui_PopStyleColor(ctx, 1)
-    -- Show full name on hover if truncated
-    if reaper.ImGui_IsItemHovered(ctx) and #src.name > max_chars then
-      reaper.ImGui_SetTooltip(ctx, src.name)
-    end
-
-    -- Level in dB
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
-    reaper.ImGui_SetCursorPosX(ctx, 2)
-    reaper.ImGui_Text(ctx, vol_to_db(vol).." dB")
-    reaper.ImGui_PopStyleColor(ctx, 1)
-
-    -- Vertical fader + VU-meter side by side
-    local vu_w    = CFG.VU_W * 2 + CFG.VU_GAP
-    local fader_x = math.floor((strip_w() - CFG.FADER_W - vu_w - 2) / 2)
-    reaper.ImGui_SetCursorPosX(ctx, fader_x)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(),         rgba(CFG.COL.FADER_RAIL))
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_SliderGrab(),      col_fader_grab)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_SliderGrabActive(),col_fader_grab)
-    local ch_v, nv = reaper.ImGui_VSliderDouble(ctx, "##vf"..sid, CFG.FADER_W, fader_h, vol, 0.0, 2.0, "")
-    reaper.ImGui_PopStyleColor(ctx, 3)
-    if reaper.ImGui_BeginPopupContextItem(ctx, "vfrst"..sid) then
-      if reaper.ImGui_MenuItem(ctx, "Reset to 0 dB")  then nv = 1.0; ch_v = true end
-      if reaper.ImGui_MenuItem(ctx, "Cut audio") then nv = 0.0; ch_v = true end
-      reaper.ImGui_EndPopup(ctx)
-    end
-    if ch_v then routing:set_vol(cue_guid, src, clamp(nv, 0, 2)) end
-
-    reaper.ImGui_SameLine(ctx, 0, 2)
-    draw_vu_meter(ctx, src.track, fader_h, vol, pan, muted, src.guid)
-
-    -- Pan
-    reaper.ImGui_Spacing(ctx)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(),         rgba(0x202329FF))
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(),  rgba(0x2A2D33FF))
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_SliderGrab(),      rgba(CFG.COL.TEXT_BRIGHT))
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_SliderGrabActive(),rgba(CFG.COL.ACCENT2))
-    reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_GrabMinSize(), 10)
-    reaper.ImGui_SetNextItemWidth(ctx, strip_w() - 6)
-    local ch_p, np = reaper.ImGui_SliderDouble(ctx, "##pan"..sid, pan, -1.0, 1.0, "")
-    reaper.ImGui_PopStyleVar(ctx, 1)
-    reaper.ImGui_PopStyleColor(ctx, 4)
-    if reaper.ImGui_BeginPopupContextItem(ctx, "panrst"..sid) then
-      if reaper.ImGui_MenuItem(ctx, "Center pan") then np = 0.0; ch_p = true end
-      reaper.ImGui_EndPopup(ctx)
-    end
-    if ch_p then routing:set_pan(cue_guid, src, clamp(np, -1, 1)) end
-
-    -- Pan value centered below the slider
-    local pan_str = math.abs(pan) < 0.01 and "C" or
-      string.format("%s%d", pan < 0 and "L" or "R", math.floor(math.abs(pan)*100+0.5))
-    local txt_w = reaper.ImGui_CalcTextSize(ctx, pan_str)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
-    reaper.ImGui_SetCursorPosX(ctx, math.floor((strip_w() - txt_w) / 2))
-    reaper.ImGui_Text(ctx, pan_str)
-    reaper.ImGui_PopStyleColor(ctx, 1)
-
-    -- Mute button
-    reaper.ImGui_Spacing(ctx)
-    local mc = muted and CFG.COL.MUTE_ON  or CFG.COL.MUTE_OFF
-    local mh = muted and CFG.COL.DANGER_H or CFG.COL.TOGGLE_OFF_HOV
-    if colored_button(ctx, muted and "MUTE" or "mute", mc, mh, CFG.COL.MUTE_ON,
-        strip_w() - 6, 22) then
-      routing:set_mute(cue_guid, src, not muted)
-    end
-
-    reaper.ImGui_EndChild(ctx)
-  end
-  reaper.ImGui_PopStyleColor(ctx, 1)
-end
-
--- =============================================================================
 --  MAIN AREA: available tracks + headphone mix
 -- =============================================================================
 
@@ -1500,8 +1937,9 @@ local function draw_main_zone(ctx, cue, cue_mgr, routing, snap, model)
     end
 
     for _, src in ipairs(available) do
+      local base = (src.color and src.color ~= 0) and native_to_imgui(src.color) or CFG.COL.ADD_BTN
       if colored_button(ctx, "+##add"..src.guid,
-          CFG.COL.ADD_BTN, CFG.COL.ADD_HOV, CFG.COL.ACCENT2, 22, 20) then
+          base, lighten(base, 0.25), lighten(base, 0.4), 22, 20, text_on(base)) then
         routing:add_track_to_cue(cue.guid, src)
         set_status("Added: "..src.name)
       end
@@ -1521,7 +1959,7 @@ local function draw_main_zone(ctx, cue, cue_mgr, routing, snap, model)
   if reaper.ImGui_BeginChild(ctx, "zone_mix", avail_w - CFG.AVAIL_W - 4, avail_h - 4, 0,
       reaper.ImGui_WindowFlags_HorizontalScrollbar()) then
 
-    local in_cue = model:sources_in_cue(cue.guid, routing)
+    local in_cue = ordered_sources_in_cue(cue, routing, model)
 
     if #in_cue == 0 then
       reaper.ImGui_Spacing(ctx)
@@ -1534,71 +1972,37 @@ local function draw_main_zone(ctx, cue, cue_mgr, routing, snap, model)
     else
       reaper.ImGui_Spacing(ctx)
       reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
-      reaper.ImGui_Text(ctx, "  MIX — "..#in_cue.." track(s)   (right-click on fader/pan = reset)")
+      reaper.ImGui_Text(ctx, "  MIX — "..#in_cue.." track(s)   (double-click fader/pan = reset)")
       reaper.ImGui_PopStyleColor(ctx, 1)
       reaper.ImGui_Separator(ctx)
       reaper.ImGui_Spacing(ctx)
 
-      -- Global headphone control bar
-      local master = get_cue_master(cue.guid)
-      local mc = master.muted and CFG.COL.MUTE_ON or CFG.COL.MUTE_OFF
-      local mh = master.muted and CFG.COL.DANGER_H or CFG.COL.TOGGLE_OFF_HOV
-      if colored_button(ctx, master.muted and "CUE MUTE" or "cue mute",
-          mc, mh, CFG.COL.MUTE_ON, 70, CFG.MASTER_H) then
-        master.muted = not master.muted
-        apply_cue_master(cue.guid, model)
-        set_status(master.muted and "Headphone muted." or "Headphone unmuted.")
-      end
-      if reaper.ImGui_IsItemHovered(ctx) then
-        reaper.ImGui_SetTooltip(ctx, "Mute / unmute the entire headphone mix")
-      end
-      reaper.ImGui_SameLine(ctx, 0, 8)
-      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
-      reaper.ImGui_Text(ctx, "Master:")
-      reaper.ImGui_PopStyleColor(ctx, 1)
-      reaper.ImGui_SameLine(ctx, 0, 4)
-      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(),
-        rgba(CFG.COL.FADER_RAIL))
-      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_SliderGrab(),
-        rgba(master.muted and CFG.COL.FADER_MUTED or CFG.COL.ACCENT))
-      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_SliderGrabActive(),
-        rgba(CFG.COL.ACCENT))
-      reaper.ImGui_SetNextItemWidth(ctx, 160)
-      local ch_m, nvm = reaper.ImGui_SliderDouble(ctx, "##master"..cue.guid,
-        master.vol, 0.0, 2.0, vol_to_db(master.vol).." dB")
-      reaper.ImGui_PopStyleColor(ctx, 3)
-      if reaper.ImGui_BeginPopupContextItem(ctx, "masterrst"..cue.guid) then
-        if reaper.ImGui_MenuItem(ctx, "Reset master to 0 dB") then nvm = 1.0; ch_m = true end
-        if reaper.ImGui_MenuItem(ctx, "Cut master")    then nvm = 0.0; ch_m = true end
-        reaper.ImGui_EndPopup(ctx)
-      end
-      if ch_m then
-        master.vol = clamp(nvm, 0, 2)
-        apply_cue_master(cue.guid, model)
-      end
-      reaper.ImGui_SameLine(ctx, 0, 8)
-      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
-      reaper.ImGui_Text(ctx, "(right-click = reset)")
-      reaper.ImGui_PopStyleColor(ctx, 1)
-      reaper.ImGui_Spacing(ctx)
-      reaper.ImGui_Separator(ctx)
-      reaper.ImGui_Spacing(ctx)
-
-      -- Fader height calculated from available space
+      -- Fader height: fill the remaining height exactly, so the strips'
+      -- bottom aligns with the "Available tracks" panel next to them. Must
+      -- stay in sync with the strip_h = fader_h + 150 + ARROW_ROW_H used
+      -- in the strips.
       local _, mix_avail_h = reaper.ImGui_GetContentRegionAvail(ctx)
-      local fader_h = math.max(60, mix_avail_h - 144)
+      local fader_h = math.max(60, mix_avail_h - 150 - ARROW_ROW_H)
 
-      local removed = nil
+      draw_master_strip(ctx, cue, model, fader_h)
+      reaper.ImGui_SameLine(ctx, 0, 16)
+
+      local removed, move_req = nil, nil
       for i, src in ipairs(in_cue) do
         local src_ref = src
         draw_fader_strip(ctx, cue.guid, src, routing, fader_h, function()
           removed = src_ref
+        end, i > 1, i < #in_cue, function(dir)
+          move_req = { guid = src_ref.guid, dir = dir }
         end)
         if i < #in_cue then reaper.ImGui_SameLine(ctx, 0, CFG.STRIP_PAD) end
       end
       if removed then
         routing:remove_track_from_cue(cue.guid, removed)
         set_status("Removed: "..removed.name)
+      end
+      if move_req then
+        move_track_in_cue(cue, routing, model, move_req.guid, move_req.dir)
       end
     end
 
@@ -1638,10 +2042,10 @@ local function draw_welcome(ctx)
       "      [+ Add REAPER selection]  add the selected tracks",
       "",
       "4.  Mix in the right area:",
-      "      Vertical fader       volume (right-click: reset / cut)",
-      "      Horizontal slider    pan (right-click: center)",
+      "      Vertical fader       drag = volume (double-click: reset to 0 dB)",
+      "      Pan knob             drag = pan (double-click: center)",
       "      MUTE                 mute this track in this headphone mix",
-      "      [x]                  remove track from headphone mix",
+      "      [x]                  remove track from headphone mix (top-right of strip)",
       "      Master               global headphone volume",
       "",
       "SNAPSHOTS A / B",
@@ -1794,15 +2198,39 @@ end
 
 local function draw_copy_from_dialog(ctx, cue_mgr, model)
   if not UI.copy_from_dlg or not UI.selected_cue then return end
-  reaper.ImGui_SetNextWindowSize(ctx, 280, 180, reaper.ImGui_Cond_Always())
+
+  -- Size the window to the actual content: title/header chrome + one row
+  -- per selectable cue + the Cancel button, instead of a fixed guess.
+  local other_count = 0
+  for _, cue in ipairs(model:cue_list()) do
+    if cue.guid ~= UI.selected_cue then other_count = other_count + 1 end
+  end
+  local win_w = 260
+  local win_h = clamp(70 + math.max(other_count, 1) * 22 + 46, 150, 420)
+  reaper.ImGui_SetNextWindowSize(ctx, win_w, win_h, reaper.ImGui_Cond_Always())
+
   local open, keep = reaper.ImGui_Begin(ctx, "Copy mix from…##cpydlg", true,
     reaper.ImGui_WindowFlags_NoResize())
   if not keep then UI.copy_from_dlg = false end
   if open then
+    local dl = reaper.ImGui_GetWindowDrawList(ctx)
     reaper.ImGui_Text(ctx, "Choose source:")
     reaper.ImGui_Spacing(ctx)
+    if other_count == 0 then
+      reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), rgba(CFG.COL.TEXT_DIM))
+      reaper.ImGui_Text(ctx, "(no other headphone mix)")
+      reaper.ImGui_PopStyleColor(ctx, 1)
+    end
     for _, cue in ipairs(model:cue_list()) do
       if cue.guid ~= UI.selected_cue then
+        local native = reaper.GetTrackColor(cue.track)
+        local swatch = native ~= 0 and native_to_imgui(native) or CFG.COL.STRIP_SEL
+        local cx, cy = reaper.ImGui_GetCursorScreenPos(ctx)
+        local r = 5
+        reaper.ImGui_DrawList_AddCircleFilled(dl, cx + r, cy + 9, r, rgba(swatch), 16)
+        reaper.ImGui_DrawList_AddCircle(dl, cx + r, cy + 9, r, rgba(0x00000099), 16, 1)
+        reaper.ImGui_Dummy(ctx, r * 2 + 6, 18)
+        reaper.ImGui_SameLine(ctx, 0, 2)
         if reaper.ImGui_Selectable(ctx, cue.name.."##cp"..cue.guid, false) then
           cue_mgr:copy_mix(cue.guid, UI.selected_cue)
           set_status("Mix copied from "..cue.name)
@@ -1810,7 +2238,9 @@ local function draw_copy_from_dialog(ctx, cue_mgr, model)
         end
       end
     end
-    if colored_button(ctx, " Cancel ", CFG.COL.STRIP_BG, CFG.COL.STRIP_SEL, CFG.COL.TEXT_DIM) then
+    reaper.ImGui_Spacing(ctx)
+    if colored_button(ctx, " Cancel ", CFG.COL.STRIP_BG, CFG.COL.STRIP_SEL,
+        CFG.COL.TEXT_DIM, 100, 28) then
       UI.copy_from_dlg = false
     end
     reaper.ImGui_End(ctx)
@@ -1910,6 +2340,16 @@ end
 --  INITIALIZATION AND MAIN LOOP
 -- =============================================================================
 
+-- Minimum window width: guarantees the MASTER strip plus 8 track strips (at
+-- normal, non-wide width) are visible together without horizontal scrolling.
+local MIN_STRIPS_VISIBLE = 4
+local MIN_MIX_ZONE_W = 80                                 -- MASTER strip
+                     + 16                                 -- gap after MASTER
+                     + MIN_STRIPS_VISIBLE * 80             -- track strips
+                     + (MIN_STRIPS_VISIBLE - 1) * CFG.STRIP_PAD
+                     + 24                                  -- child padding + scrollbar margin
+local MIN_WINDOW_W = CFG.SIDEBAR_W + 1 + CFG.AVAIL_W + 4 + MIN_MIX_ZONE_W + 20
+
 local ctx = reaper.ImGui_CreateContext(CFG.SCRIPT_NAME)
 reaper.ImGui_Attach(ctx, fontBody)
 reaper.ImGui_Attach(ctx, fontTitle)
@@ -1953,10 +2393,18 @@ local function loop()
   local nc, nv = push_style(ctx)
   PushFont(ctx, fontBody, FONT_BODY)
   reaper.ImGui_SetNextWindowSize(ctx, CFG.WINDOW_W, CFG.WINDOW_H, reaper.ImGui_Cond_FirstUseEver())
+  reaper.ImGui_SetNextWindowSizeConstraints(ctx, MIN_WINDOW_W, 400, 1000000, 1000000)
+  -- The title bar's collapse/close buttons are drawn inside Begin() itself
+  -- and use the generic Button colors, so give those visible hover/active
+  -- feedback here (same amber as the "+ New Cue" button) before Begin runs.
+  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(),        rgba(CFG.COL.MUTE_OFF))
+  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), rgba(CFG.COL.ACCENT_H))
+  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(),  rgba(CFG.COL.ACCENT_A))
   local visible, keep = reaper.ImGui_Begin(ctx,
     CFG.SCRIPT_NAME, true,
     reaper.ImGui_WindowFlags_NoScrollbar() |
     reaper.ImGui_WindowFlags_NoScrollWithMouse())
+  reaper.ImGui_PopStyleColor(ctx, 3)
   if not keep then open = false end
 
   if visible then
