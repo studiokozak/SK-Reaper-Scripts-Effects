@@ -125,7 +125,7 @@ Track names in SENDS and RECEIVES are now the same white colour in both sections
       </version>
     </reapack>
     <reapack name="SK DocShadrach's Analog Ecosystem Companion.lua" type="script" desc="SK DocShadrach's Analog Ecosystem Companion : Automates DocShadrach's Analog Molecule / Hot Summer console workflow (channels, group buses, Mix Bus)">
-      <version name="1.0" author="Studio Kozak" time="2026-09-08T00:00:00Z">
+      <version name="1.1" author="Studio Kozak" time="2026-09-08T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20DocShadrach%27s%20Analog%20Ecosystem%20Companion.lua</source>
         <changelog><![CDATA[Initial release. Sets up the analog console workflow designed by DocShadrach around The Analog Molecule and The Hot Summer: individual tracks, up to 8 group buses, and a Mix Bus, routed either with sends or folders, with a one-click "build from scratch" option.]]></changelog>
       </version>
