@@ -1,6 +1,6 @@
 -- @description SK DocShadrach's Analog Ecosystem Companion
 -- @author Studio Kozak
--- @version 1.0
+-- @version 1.1
 -- @about
 --   Sets up the analog console workflow designed by DocShadrach around
 --   two plugins: The Analog Molecule and The Hot Summer.
@@ -43,6 +43,11 @@ local GROUP_SUM_GUID_KEY   = "SK_DEC_GROUP_SUM_GUID"
 local MIXBUS_SUM_GUID_KEY  = "SK_DEC_MIXBUS_SUM_GUID"
 local MIXBUS_MOL_GUID_KEY  = "SK_DEC_MIXBUS_MOL_GUID"
 local CHANNEL_MOL_GUID_KEY = "SK_DEC_CHANNEL_MOL_GUID"
+
+local FX_DEFAULT_NAME = {
+  molecule_fx_name = "The Analog Molecule",
+  summer_fx_name   = "The Hot Summer",
+}
 
 -- ============================================================
 --  COLOR SWATCHES
@@ -1200,12 +1205,15 @@ local function draw_fx_row(label, key, msg_key)
 
   reaper.ImGui_SameLine(ctx, 0, 6)
   if btn("Test##test_"..key) then
-    local resolved, err = resolve_fx_name(state[key])
+    local target = FX_DEFAULT_NAME[key] or state[key]
+    local resolved, err = resolve_fx_name(target)
     if resolved then
       state[key] = resolved
       save_str(key, resolved)
       state[msg_key] = { ok = true, txt = "OK" }
     else
+      state[key] = target
+      save_str(key, target)
       state[msg_key] = { ok = false, txt = err }
     end
   end
