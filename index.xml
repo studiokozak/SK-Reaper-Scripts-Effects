@@ -96,6 +96,12 @@ The pattern being worked on is kept with the project, so closing the window no l
       </version>
     </reapack>
     <reapack name="SK Extended VCA.lua" type="script" desc="SK Extended VCA : Software VCA controlling track volume and child-track sends via a relative dB offset, with an automatable master-track link">
+      <version name="1.0.1" author="Studio Kozak" time="2026-09-09T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Extended%20VCA.lua</source>
+        <changelog><![CDATA[Fixed a crash and the loss of VCA assignments when switching between project tabs. Each project tab now keeps its own VCAs, and leaving a tab saves them back into that project.
+An assigned track that cannot be found is now kept and shown in red instead of being removed, since it is often only out of reach for a moment, during an undo or while another tab is on screen. Removing an element stays a click on the x above its fader.
+After an unexpected error the script keeps running and reports it in the REAPER console, and the action can always be started again without restarting REAPER.]]></changelog>
+      </version>
       <version name="1.0" author="Studio Kozak" time="2026-09-02T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Extended%20VCA.lua</source>
         <changelog><![CDATA[Initial release. A software VCA controlling the volume of one or more tracks together with selected sends on their child tracks, as a relative dB offset -- manual mixing on each element still works and is picked up automatically. A VCA can optionally be linked to a regular track: once linked, that track's own fader or volume envelope drives the VCA offset, so it can be automated with REAPER's native automation lanes (Read/Touch/Latch/Write).]]></changelog>
