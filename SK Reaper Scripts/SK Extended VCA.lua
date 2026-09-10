@@ -1,7 +1,7 @@
 --[[
 @description SK Extended VCA
 @author Stephan (Studio Kozak)
-@version 1.0.1
+@version 1.0.2
 @provides [main] .
 @about
   A VCA fader that controls the volume of one or more tracks together
@@ -36,14 +36,13 @@
 
   Requires ReaImGui, available through ReaPack.
 @changelog
-  v1.0.1
-  - Fixes a crash and the loss of VCA assignments when switching between
-    project tabs.
-  - An assigned track that cannot be found is now kept and shown in red
-    instead of being removed.
-  - After an unexpected error the script keeps running and reports it in
-    the Reaper console, and the action can always be started again
-    without restarting Reaper.
+  v1.0.2
+  - Fixes a crash when restoring the window after reducing it, which
+    happened on some screens depending on display scaling.
+  - The reduced window now fits the toolbar exactly, without a scrollbar.
+  - If the window runs into a problem, it is rebuilt on the next redraw
+    while the VCAs keep working, and the problem is written in the
+    Reaper console.
 ]]--
 
 local reaper = reaper
@@ -149,14 +148,21 @@ local ROW_H       = 24
 -- Window and fonts
 -- ============================================================
 
-local ctx = reaper.ImGui_CreateContext('SK Extended VCA')
 local NEW_FONT_API = reaper.ImGui_CreateFontFromFile ~= nil
+local ctx
+
+-- ReaImGui throws the window away when something goes badly wrong in
+-- it. This tells whether the one in hand is still usable.
+local function ctx_valid()
+  if not reaper.ImGui_ValidatePtr then return ctx ~= nil end
+  return ctx ~= nil and reaper.ImGui_ValidatePtr(ctx, 'ImGui_Context*')
+end
 
 reaper.atexit(function()
   reaper.SetExtState(RUNSTATE_SECTION, 'running', '0', false)
   reaper.SetExtState(RUNSTATE_SECTION, 'heartbeat', '0', false)
   set_toolbar_state(false)
-  if reaper.ImGui_DestroyContext then reaper.ImGui_DestroyContext(ctx) end
+  if reaper.ImGui_DestroyContext and ctx_valid() then reaper.ImGui_DestroyContext(ctx) end
 end)
 
 -- ============================================================
@@ -169,9 +175,12 @@ end)
 -- and the VCAs carry on working.
 local stk = { child = 0, color = 0, font = 0 }
 
+-- A panel lying entirely out of view is skipped by ReaImGui, and in
+-- that case it must not be closed either. Only a panel really opened is
+-- counted, and closed.
 local function ui_begin_child(id, w, h, cflags, wflags)
   local ok = reaper.ImGui_BeginChild(ctx, id, w, h, cflags, wflags)
-  stk.child = stk.child + 1
+  if ok then stk.child = stk.child + 1 end
   return ok
 end
 
@@ -243,9 +252,22 @@ local function make_font(size, bold)
   return f
 end
 
-local FONT     = make_font(13, false)
-local FONT_SM  = make_font(11, false)
-local FONT_HDR = make_font(14, true)
+local FONT, FONT_SM, FONT_HDR
+local drag_hold = {}
+local dbedit_buf = {}
+
+-- Builds the window, fonts included. Called once at startup, and again
+-- if the window ever breaks down, while the VCAs carry on underneath.
+local function create_ui_context()
+  ctx = reaper.ImGui_CreateContext('SK Extended VCA')
+  FONT     = make_font(13, false)
+  FONT_SM  = make_font(11, false)
+  FONT_HDR = make_font(14, true)
+  stk.child, stk.color, stk.font = 0, 0, 0
+  drag_hold, dbedit_buf = {}, {}
+end
+
+create_ui_context()
 
 local function push_font(f, size)
   if not (f and reaper.ImGui_PushFont) then return false end
@@ -743,9 +765,6 @@ end
 -- Faders, buttons and labels
 -- ============================================================
 
-local drag_hold = {}
-local dbedit_buf = {}
-
 -- Vertical fader. Hold Ctrl for a finer move, double-click to return to
 -- 0 dB, right-click to type a value.
 local function fader(dl, id, x, y, w, h, db, accent)
@@ -806,7 +825,7 @@ local function fader(dl, id, x, y, w, h, db, accent)
       if reaper.ImGui_SetKeyboardFocusHere then reaper.ImGui_SetKeyboardFocusHere(ctx) end
     end
     reaper.ImGui_SetNextItemWidth(ctx, 90)
-    local rv, newv = reaper.ImGui_InputDouble(ctx, '##dbval' .. id, dbedit_buf[id], 0.5, 0.5, '%.1f')
+    local rv, newv = reaper.ImGui_InputDouble(ctx, '##dbval' .. id, dbedit_buf[id] or db, 0.5, 0.5, '%.1f')
     if rv then
       dbedit_buf[id] = newv
       db = clamp(newv, WIDGET_DB_MIN, WIDGET_DB_MAX)
@@ -1353,6 +1372,9 @@ local is_minimized = false
 local last_full_w, last_full_h = 980, 640
 local pending_resize = nil
 local MIN_WINDOW_H = 92
+-- Height of the reduced window, measured from the toolbar itself when
+-- reducing, since it depends on fonts and display scaling.
+local minimized_h = MIN_WINDOW_H
 
 local function draw_toolbar()
   local pf = push_font(FONT_HDR, 14)
@@ -1402,7 +1424,16 @@ local function draw_toolbar()
       pending_resize = { w = last_full_w, h = last_full_h }
     else
       local content_w = math.max(title_w, (x6 + bs + gap + bs) - bx)
-      pending_resize = { w = content_w + 24, h = MIN_WINDOW_H }
+      -- the reduced window ends just below the toolbar's separator line,
+      -- plus the window's own bottom margin
+      local _, wy = reaper.ImGui_GetWindowPos(ctx)
+      local pad_y = 8
+      if reaper.ImGui_GetStyleVar and reaper.ImGui_StyleVar_WindowPadding then
+        local _, py = reaper.ImGui_GetStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding())
+        if py then pad_y = py end
+      end
+      minimized_h = math.ceil((by + bs + 8 + 1) - wy + pad_y + 2)
+      pending_resize = { w = content_w + 24, h = minimized_h }
     end
     is_minimized = not is_minimized
   end
@@ -1484,12 +1515,16 @@ local CHILD_HSCROLL = reaper.ImGui_WindowFlags_HorizontalScrollbar and reaper.Im
 -- ============================================================
 
 local function draw_frame()
+  -- a click on reduce or restore only resizes the window on the next
+  -- redraw, so this one keeps the layout it started with
+  local minimized_now = is_minimized
+
   local nbtn = push_theme_buttons()
   local pf = push_font(FONT, 13)
   draw_toolbar()
   draw_rename_popup()
 
-  if not is_minimized then
+  if not minimized_now then
     if reaper.ImGui_GetWindowSize then
       last_full_w, last_full_h = reaper.ImGui_GetWindowSize(ctx)
     end
@@ -1497,6 +1532,7 @@ local function draw_frame()
     local _, strips_h = reaper.ImGui_GetContentRegionAvail(ctx)
     strips_h = math.max(strips_h, SH_MIN + PAD * 2)
 
+    -- each panel is closed only if it was really opened
     ui_push_color(reaper.ImGui_Col_ChildBg(), COL_PANEL)
     if ui_begin_child('left', LEFT_W, strips_h, 0, 0) then
       if show_assign_panel then
@@ -1508,16 +1544,16 @@ local function draw_frame()
       else
         draw_left_panel()
       end
+      ui_end_child()
     end
-    ui_end_child()
     ui_pop_color(1)
 
     reaper.ImGui_SameLine(ctx, 0, PANEL_GAP)
 
     if ui_begin_child('right', 0, strips_h, 0, CHILD_HSCROLL) then
       draw_strips_row()
+      ui_end_child()
     end
-    ui_end_child()
   end
 
   -- one undo point per mouse move, added when the button is released
@@ -1549,6 +1585,9 @@ local function loop()
   reaper.SetExtState(RUNSTATE_SECTION, 'heartbeat', tostring(reaper.time_precise()), false)
   SyncActiveProject()
 
+  -- the window broke down at some point: build a fresh one
+  if not ctx_valid() then create_ui_context() end
+
   -- the action was run again: bring the window back to the front
   if reaper.GetExtState(RUNSTATE_SECTION, 'want_show') == '1' then
     reaper.SetExtState(RUNSTATE_SECTION, 'want_show', '0', false)
@@ -1562,7 +1601,7 @@ local function loop()
   local npushed = push_theme_base()
   if reaper.ImGui_SetNextWindowSizeConstraints then
     if is_minimized then
-      reaper.ImGui_SetNextWindowSizeConstraints(ctx, 150, MIN_WINDOW_H, 1000000, MIN_WINDOW_H + 40)
+      reaper.ImGui_SetNextWindowSizeConstraints(ctx, 150, minimized_h, 1000000, minimized_h + 40)
     else
       reaper.ImGui_SetNextWindowSizeConstraints(ctx, 980, 640, 1000000, 1000000)
     end
@@ -1579,11 +1618,16 @@ local function loop()
   local visible = reaper.ImGui_Begin(ctx, 'SK Extended VCA##skvca3', nil, begin_flags)
   if visible then
     local ok, err = pcall(draw_frame)
-    ui_unwind()
-    reaper.ImGui_End(ctx)
+    -- the problem is written down first, before anything else can fail
     if not ok then report_error(err) end
+    -- if the window was thrown away meanwhile, there is nothing left to
+    -- close: a fresh one is built on the next redraw
+    if ctx_valid() then
+      ui_unwind()
+      reaper.ImGui_End(ctx)
+    end
   end
-  reaper.ImGui_PopStyleColor(ctx, npushed)
+  if ctx_valid() then reaper.ImGui_PopStyleColor(ctx, npushed) end
 
   -- the VCAs keep working whether the window is open, shrunk or hidden
   local eok, eerr = pcall(run_engine)
