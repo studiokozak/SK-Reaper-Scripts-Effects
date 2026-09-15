@@ -112,6 +112,12 @@ After an unexpected error the script keeps running and reports it in the REAPER 
         <changelog><![CDATA[Initial release. A software VCA controlling the volume of one or more tracks together with selected sends on their child tracks, as a relative dB offset -- manual mixing on each element still works and is picked up automatically. A VCA can optionally be linked to a regular track: once linked, that track's own fader or volume envelope drives the VCA offset, so it can be automated with REAPER's native automation lanes (Read/Touch/Latch/Write).]]></changelog>
       </version>
     </reapack>
+    <reapack name="SK Balance Control.lua" type="script" desc="SK Balance Control : Checkbox-based custom mixer bank for any mix of tracks and sends, with fader/pan link groups and snapshots">
+      <version name="1.0" author="Studio Kozak" time="2026-09-15T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Balance%20Control.lua</source>
+        <changelog><![CDATA[Initial release. A mixing console built from a custom bank of faders: tick any track or send in the project to show it as a strip, with mute, solo, phase, pan and volume controls, and a routing-type menu on send strips. The Link toggle gangs any set of strips together, in normal or inverse orientation, so they move together while keeping their relative balance. Four snapshot slots (A/B/C/D) save and recall the whole bank -- which tracks/sends are checked, plus their full balance -- with the project.]]></changelog>
+      </version>
+    </reapack>
     <reapack name="SK Routing Hub.lua" type="script" desc="SK Routing Hub : Comprehensive routing management tool">
       <version name="2.1" author="Studio Kozak" time="2026-08-29T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Routing%20Hub.lua</source>
