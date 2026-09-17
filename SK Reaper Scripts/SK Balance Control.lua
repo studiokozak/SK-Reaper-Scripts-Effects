@@ -38,7 +38,6 @@
 --
 --   Requires ReaImGui (SWS recommended).
 
--- Stop here if ReaImGui isn't installed.
 if not reaper.ImGui_CreateContext then
   reaper.ShowMessageBox(
     "This script requires ReaImGui.\n\nInstall it via ReaPack:\nExtensions > ReaPack > Browse packages > 'ReaImGui: ReaScript binding for Dear ImGui'.",
@@ -70,17 +69,17 @@ local COL_KNOB_EDGE = 0x000000FF
 local COL_BTN       = 0x33332FFF
 local COL_BTN_EDGE  = 0x000000AA
 
-local COL_CHECK_BG     = 0x6E685DFF  -- unchecked checklist box fill (lighter than panel)
-local COL_CHECK_BORDER = 0xC9C3B4FF  -- unchecked checklist box border
+local COL_CHECK_BG     = 0x6E685DFF
+local COL_CHECK_BORDER = 0xC9C3B4FF
 
 local COL_MUTE      = 0xC0402FFF
 local COL_SOLO      = 0xE0A030FF
 local COL_PHASE     = 0x3B8FB0FF
 local COL_LINK      = 0xE0A030FF
-local COL_LINK_INV  = 0x4A90D9FF  -- link icon color when "inverse"
+local COL_LINK_INV  = 0x4A90D9FF
 
 local COL_HDR_DEF   = 0x555049FF
-local COL_ENV_V     = 0x5FC26BFF  -- accent green, used for the Sends toggle and send rows
+local COL_ENV_V     = 0x5FC26BFF  -- green, used for the Sends button and the send rows
 local COL_TICK      = 0x55504955
 local COL_TICK_0    = 0xE0A03088
 local COL_DIM       = 0x0E0E0CB0
@@ -98,13 +97,13 @@ local STRIP_GAP   = 6
 local PAD         = 8
 
 local HDR_H       = 28
-local ORIGIN_H    = 14       -- room for the origin-track name row on a send strip
-local TYPE_H      = 18       -- room for the send-type menu on a send strip
+local ORIGIN_H    = 14       -- row showing where a send comes from
+local TYPE_H      = 18       -- send-type menu
 local KNOB_D      = 32
 local KNOB_Y      = HDR_H + ORIGIN_H + TYPE_H + 6
 local PANLBL_Y    = KNOB_Y + KNOB_D + 1
 local BTN_W       = 16
-local BTN_ROW_GAP = 3        -- gap between the M/S/P row and the Link row
+local BTN_ROW_GAP = 3
 local BTN_H       = 16
 local BTN_GAP     = 4
 local BTN_Y       = PANLBL_Y + 14
@@ -115,7 +114,7 @@ local DBLBL_Y     = FADER_Y + FADER_H + 2
 
 local LEFT_W      = 260      -- width of the track/send checklist panel
 local PANEL_GAP   = 6
-local ROW_H       = 20       -- height of one row in the left-panel checklist
+local ROW_H       = 20       -- height of one row in that panel
 
 -- =============================================================================
 -- Window and fonts
@@ -200,6 +199,14 @@ local DEFAULT_NORM = gain_to_norm(1.0)
 local function db_to_gain(db)
   db = clamp(db, DB_MIN, DB_MAX)
   return 10.0 ^ (db / 20.0)
+end
+
+-- A dB value kept inside the fader's own travel, for everything the Link
+-- feature computes. A track sitting at true silence otherwise reports a
+-- value below the bottom of the fader, which would throw the whole
+-- linked group to the opposite end of its travel.
+local function link_db(g)
+  return clamp(gain_to_db(g), DB_MIN, DB_MAX)
 end
 
 local function fmt_db(g)
@@ -338,9 +345,8 @@ local function get_related_sources(tr)
   return list
 end
 
--- Tracks that `tr` sends into, plus its folder parent (if it's nested
--- inside one) - the reverse of get_related_sources, for moving up
--- the routing/folder hierarchy instead of down.
+-- Tracks that `tr` sends into, plus its folder parent - the opposite
+-- direction of get_related_sources.
 local function get_related_destinations(tr)
   local list, seen = {}, {}
   local n = reaper.GetTrackNumSends(tr, 0)
@@ -416,7 +422,7 @@ local function enforce_solo(owner, oguid, sends, soloing)
 end
 
 -- =============================================================================
--- Link groups: strips ganged together via their own "L" toggle
+-- Link groups: strips ganged together via their own chain icon
 -- =============================================================================
 local g_link_delta = nil          -- this frame's fader move, in dB
 local g_link_source_key = nil
@@ -424,14 +430,24 @@ local g_pan_link_delta = nil      -- this frame's pan-knob move
 local g_pan_link_source_key = nil
 -- link_set[key] holds each strip's link state: off, "normal", or "inverse"
 local link_set = {}
-local g_link_all_requested = false  -- set when "Link all" is clicked
-local g_link_all_lit = false        -- whether every visible strip is linked
+local g_link_all_requested = false
+local g_link_all_lit = false
 
--- Last known volume (dB) / pan value we ourselves wrote for each visible
--- key, so we can tell a REAPER-side move (mixer, automation) apart from
--- one the script just made, and still cascade it through a Link group.
+-- Last known volume (dB) and pan for each visible strip, so a move made
+-- in REAPER itself (mixer, automation, control surface) can be told apart
+-- from one made here, and still cascade through a Link group.
 local last_vol_db = {}
 local last_pan_val = {}
+
+-- Same idea for mute / solo / phase, which have no "drag" to report:
+-- these hold their state as of the END of the PREVIOUS frame, and are
+-- written ONLY by the refresh at the end of a frame. Anything the script
+-- writes during a frame just marks the strip in touched_* (so the
+-- outside-change check skips it, its change having already been passed
+-- on) and stores the written value in pending_*.
+local last_mute, last_solo, last_phase = {}, {}, {}
+local touched_mute, touched_solo, touched_phase = {}, {}, {}
+local pending_mute, pending_solo, pending_phase = {}, {}, {}
 
 -- +1 for normal, -1 for inverse, used to combine two strips' orientations.
 local function link_sign(key)
@@ -481,6 +497,32 @@ local function apply_linked_group(fader_targets, source_key, raw_delta, lo, hi, 
   end
   for _, t in ipairs(participants) do
     if olds[t] then set_value(t, clamp(olds[t] + eff * signs[t], lo, hi)) end
+  end
+end
+
+-- Passes a mute / solo / phase change from one strip to the rest of its
+-- Link group, flipping it for members set to "inverse".
+-- `source_already_set` is true when the source strip already holds newv
+-- (its own button was clicked, or it was changed in REAPER): only the
+-- other members need writing then.
+local function apply_linked_bool(visible, source_key, newv, set_fn, source_entry, touched_tbl, pending_tbl, source_already_set)
+  if not link_set[source_key] then return end
+  local self_sign = link_sign(source_key)
+
+  if not source_already_set and source_entry then set_fn(source_entry, newv) end
+  touched_tbl[source_key] = true
+  pending_tbl[source_key] = newv
+
+  for _, m2 in ipairs(visible) do
+    if m2.key ~= source_key and link_set[m2.key] then
+      -- written as if/else on purpose: the usual one-line shortcut would
+      -- hand every member the opposite value whenever newv is false
+      local v2
+      if link_sign(m2.key) * self_sign > 0 then v2 = newv else v2 = not newv end
+      set_fn(m2, v2)
+      touched_tbl[m2.key] = true
+      pending_tbl[m2.key] = v2
+    end
   end
 end
 
@@ -651,15 +693,10 @@ local function draw_glow(dl, x, y, w, h, col)
   end
 end
 
--- A custom checklist row: a small checkbox square, an optional colored
--- dot, an optional dim prefix (e.g. "->"), and a label - in that order,
--- left to right - with the WHOLE row clickable (not just the tiny
--- checkbox), so ticking a track or a send on the left is easy to hit.
--- Checkbox and dot always sit at the same x regardless of the prefix, so
--- rows stay vertically aligned. Pass italic=true to render the label in
--- italics (used for a send's destination name). Returns:
---   clicked        true the frame the row is left-clicked
---   right_clicked  true the frame the row is right-clicked
+-- One row of the left panel: a checkbox, an optional colored dot, an
+-- optional dim prefix (e.g. "->"), and a name. The whole row is
+-- clickable, not just the tiny checkbox. Returns whether it was
+-- left-clicked and whether it was right-clicked.
 local function checklist_row(dl, id, x, y, w, h, checked, dot_col, text, text_col, prefix, italic, check_col)
   reaper.ImGui_SetCursorScreenPos(ctx, x, y)
   reaper.ImGui_InvisibleButton(ctx, '##row' .. id, w, h)
@@ -682,6 +719,8 @@ local function checklist_row(dl, id, x, y, w, h, checked, dot_col, text, text_co
     reaper.ImGui_DrawList_AddRect(dl, x, sy, x + sq, sy + sq, COL_CHECK_BORDER, 3, 0, 1.3)
   end
 
+  -- checkbox and dot always sit at the same x, so rows stay aligned
+  -- whether or not there is a prefix
   local tx = x + sq + 8
   local pf = push_font(FONT, 13)
   if dot_col then
@@ -705,8 +744,7 @@ local function checklist_row(dl, id, x, y, w, h, checked, dot_col, text, text_co
   return clicked, right_clicked
 end
 
--- A plain on/off button with a text label. Also usable as a momentary
--- action button by always passing on=false.
+-- A plain on/off button with a text label.
 local function toggle_button(dl, id, x, y, w, h, label, on, on_col)
   if on then draw_glow(dl, x, y, w, h, on_col) end
   button_frame(dl, x, y, w, h, on, on_col)
@@ -732,7 +770,7 @@ local function phase_button(dl, id, x, y, w, h, on)
   return reaper.ImGui_IsItemClicked(ctx)
 end
 
--- The chain-link (Link) toggle. Left click toggles it on/off, right click
+-- The chain-link (Link) toggle. Left click turns it on/off, right click
 -- flips a linked strip between "normal" and "inverse".
 local function link_button(dl, id, x, y, w, h, state)
   local on = state and true or false
@@ -752,8 +790,7 @@ local function link_button(dl, id, x, y, w, h, state)
   return reaper.ImGui_IsItemClicked(ctx, 0), reaper.ImGui_IsItemClicked(ctx, 1)
 end
 
--- One snapshot slot button (A/B/C/D). Left click recalls it, right click
--- saves the current bank into it. Lit when that slot has data saved.
+-- One snapshot slot (A/B/C/D). Lit when that slot holds saved data.
 local function snapshot_button(dl, id, x, y, w, h, label, lit)
   if lit then draw_glow(dl, x, y, w, h, COL_ACCENT) end
   button_frame(dl, x, y, w, h, lit, COL_ACCENT)
@@ -791,11 +828,10 @@ local function link_all_button(dl, id, x, y, on)
   return reaper.ImGui_IsItemClicked(ctx), w
 end
 
--- A plain momentary action button (e.g. "All" / "None"), sized to its
--- label. Gives visual feedback three ways: a hover highlight, an accent
--- fill while the mouse is held down, and a brief accent flash right after
--- the click so a quick click is still noticeable once released.
-local action_flash = {}  -- id -> time_precise() the flash ends
+-- A plain action button (e.g. "All" / "None"), sized to its label. It
+-- lights up on hover, while held, and for a moment after the click, so a
+-- quick click is still visible once the mouse is released.
+local action_flash = {}
 local function action_button(dl, id, x, y, label, min_w)
   local pf = push_font(FONT, 13)
   local tw, th = reaper.ImGui_CalcTextSize(ctx, label)
@@ -824,9 +860,8 @@ end
 -- =============================================================================
 -- Shared pieces of a strip: header, labels, button positions
 -- =============================================================================
--- Draws a strip's colored name header. A left click on it is reported
--- back (used to isolate this strip - see on_isolate in render_strip); a
--- right click opens the same context menu as a track's row on the left.
+-- Draws a strip's colored name header, and reports a left click (used to
+-- keep only this strip) and a right click (opens the context menu).
 local function draw_header(dl, x, y, color_tr, name, id)
   local hdr = native_to_imgui(reaper.GetTrackColor(color_tr))
   reaper.ImGui_DrawList_AddRectFilled(dl, x, y, x + SW, y + HDR_H, hdr, 3)
@@ -918,8 +953,7 @@ local function send_type_combo(id, x, y, w, tr, idx, key, all_visible, mark_dirt
 end
 
 -- =============================================================================
--- Shared actions (phase, solo, mute) that work on both a track strip and
--- a send strip
+-- Phase, solo and mute actions, written once for both kinds of strip
 -- =============================================================================
 local function get_phase(m)
   if m.kind == "track" then return reaper.GetMediaTrackInfo_Value(m.track, "B_PHASE") > 0.5
@@ -956,12 +990,11 @@ local function set_mute(m, v, owner_soloing)
 end
 
 -- =============================================================================
--- One strip: a track's own fader, or one of its outgoing sends.
+-- One strip: a track's own fader, or one of its outgoing sends
 -- =============================================================================
 local function render_strip(dl, x, y, id, m, all_visible, owner_soloing, mark_dirty, on_isolate, on_context_menu)
   local key = m.key
   local self_linked = link_set[key] or false
-  local self_sign = link_sign(key)
 
   local color_tr, label
   if m.kind == "track" then
@@ -993,10 +1026,9 @@ local function render_strip(dl, x, y, id, m, all_visible, owner_soloing, mark_di
     if ok then uivol, uipan = v, p end
   end
 
-  -- Remember this strip's current values before touching anything, so we
-  -- can later tell whether it was moved directly in REAPER (mixer,
-  -- arrange view) instead of through this script.
-  m.raw_vol_db = gain_to_db(uivol)
+  -- values as they stand before anything is touched, so a move made in
+  -- REAPER itself can be spotted further down
+  m.raw_vol_db = link_db(uivol)
   m.raw_pan = uipan
 
   local kx = x + (SW - KNOB_D) * 0.5
@@ -1009,19 +1041,22 @@ local function render_strip(dl, x, y, id, m, all_visible, owner_soloing, mark_di
   if pdelta then g_pan_link_delta = pdelta; g_pan_link_source_key = key end
   draw_panlabel(dl, x, y, fmt_pan((pch or pacv) and np or uipan))
 
+  -- Clicking this strip's own M/S/P buttons writes this strip, then hands
+  -- the rest of the group to the same routine the outside-change check
+  -- uses, so both behave identically. The baselines (last_mute and
+  -- friends) are deliberately left alone here - only touched_* and
+  -- pending_* are stamped.
   local by = y + BTN_Y
   local mute_shown = get_mute(m, owner_soloing)
   if toggle_button(dl, id .. 'M', button_x(x, 0), by, BTN_W, BTN_H, "M", mute_shown, COL_MUTE) then
     local newv = not mute_shown
     set_mute(m, newv, owner_soloing)
+    touched_mute[key] = true
+    pending_mute[key] = newv
     if self_linked then
-      for _, m2 in ipairs(all_visible) do
-        if m2.key ~= key and link_set[m2.key] then
-          local v2
-          if link_sign(m2.key) * self_sign > 0 then v2 = newv else v2 = not newv end
-          set_mute(m2, v2, owner_soloing)
-        end
-      end
+      apply_linked_bool(all_visible, key, newv,
+        function(m2, v2) set_mute(m2, v2, owner_soloing) end,
+        m, touched_mute, pending_mute, true)
     end
     mark_dirty()
   end
@@ -1029,14 +1064,10 @@ local function render_strip(dl, x, y, id, m, all_visible, owner_soloing, mark_di
   if toggle_button(dl, id .. 'S', button_x(x, 1), by, BTN_W, BTN_H, "S", solo, COL_SOLO) then
     local newv = not solo
     set_solo(m, newv)
+    touched_solo[key] = true
+    pending_solo[key] = newv
     if self_linked then
-      for _, m2 in ipairs(all_visible) do
-        if m2.key ~= key and link_set[m2.key] then
-          local v2
-          if link_sign(m2.key) * self_sign > 0 then v2 = newv else v2 = not newv end
-          set_solo(m2, v2)
-        end
-      end
+      apply_linked_bool(all_visible, key, newv, set_solo, m, touched_solo, pending_solo, true)
     end
     mark_dirty()
   end
@@ -1044,14 +1075,10 @@ local function render_strip(dl, x, y, id, m, all_visible, owner_soloing, mark_di
   if phase_button(dl, id .. 'P', button_x(x, 2), by, BTN_W, BTN_H, phase) then
     local newv = not phase
     set_phase(m, newv)
+    touched_phase[key] = true
+    pending_phase[key] = newv
     if self_linked then
-      for _, m2 in ipairs(all_visible) do
-        if m2.key ~= key and link_set[m2.key] then
-          local v2
-          if link_sign(m2.key) * self_sign > 0 then v2 = newv else v2 = not newv end
-          set_phase(m2, v2)
-        end
-      end
+      apply_linked_bool(all_visible, key, newv, set_phase, m, touched_phase, pending_phase, true)
     end
     mark_dirty()
   end
@@ -1072,11 +1099,11 @@ local function render_strip(dl, x, y, id, m, all_visible, owner_soloing, mark_di
     else reaper.CSurf_OnSendVolumeChange(m.owner, m.idx, disp, false) end
   end
   if fch then mark_dirty() end
-  -- the fader move is tracked in dB rather than raw fader position, so a
-  -- linked group keeps its relative balance even though REAPER's own
-  -- fader curve isn't a straight line in dB
+  -- the move is measured in dB rather than in fader travel, so a linked
+  -- group keeps its balance even though REAPER's fader curve isn't a
+  -- straight line in dB
   if fdelta then
-    g_link_delta = gain_to_db(disp) - gain_to_db(uivol)
+    g_link_delta = link_db(disp) - link_db(uivol)
     g_link_source_key = key
   end
   draw_dblabel(dl, x, y, fmt_db(disp))
@@ -1108,12 +1135,15 @@ local function set_selected(key, on)
       end
       last_vol_db[key] = nil
       last_pan_val[key] = nil
+      last_mute[key] = nil
+      last_solo[key] = nil
+      last_phase[key] = nil
       changed = true
     end
   end
   if changed then
-    -- any change to what's checked resets every link group - a link
-    -- group's meaning depends on exactly which strips are on screen
+    -- a link group only means something for the exact set of strips on
+    -- screen, so any change to what's checked clears every group
     link_set = {}
     g_link_all_lit = false
   end
@@ -1143,25 +1173,25 @@ local function select_all_items(include_sends)
   end
 end
 
--- Right-click context menu actions on a track's checklist row.
--- 0) checks the tracks `tr` sends into, plus its folder parent - the
---    reverse of (1), for moving up the hierarchy instead of down.
+-- The five entries of the right-click menu on a track.
+
+-- Checks the tracks `tr` sends into, plus its folder parent.
 local function select_destinations(tr)
   for _, p in ipairs(get_related_destinations(tr)) do
     set_selected(reaper.GetTrackGUID(p), true)
   end
 end
 
--- 1) checks the tracks that send into `tr`, or (if `tr` is a folder) sit
---    inside it.
+-- Checks the tracks that send into `tr`, or (if `tr` is a folder) sit
+-- inside it.
 local function select_sources(tr)
   for _, c in ipairs(get_related_sources(tr)) do
     set_selected(reaper.GetTrackGUID(c), true)
   end
 end
 
--- 2) checks the sends feeding into `tr` (its receives) - the specific
---    send items themselves, not the tracks that own them.
+-- Checks the sends feeding into `tr` - the send items themselves, not the
+-- tracks that own them.
 local function select_track_receives(tr)
   local guid = reaper.GetTrackGUID(tr)
   local n = reaper.GetTrackNumSends(tr, -1)
@@ -1173,7 +1203,7 @@ local function select_track_receives(tr)
   end
 end
 
--- 3) checks `tr`'s own outgoing sends.
+-- Checks `tr`'s own outgoing sends.
 local function select_track_sends(tr)
   local guid = reaper.GetTrackGUID(tr)
   local n = reaper.GetTrackNumSends(tr, 0)
@@ -1183,8 +1213,8 @@ local function select_track_sends(tr)
   end
 end
 
--- 4) checks the outgoing sends of `tr`'s child tracks (same definition as
---    select_sources), except any of those sends that go back to `tr`.
+-- Checks the outgoing sends of `tr`'s sources, except those going back to
+-- `tr` itself.
 local function select_sources_sends(tr)
   local self_guid = reaper.GetTrackGUID(tr)
   for _, c in ipairs(get_related_sources(tr)) do
@@ -1200,8 +1230,8 @@ local function select_sources_sends(tr)
 end
 
 -- =============================================================================
--- Snapshots: 4 quick slots (A/B/C/D) that store the whole bank - which
--- tracks/sends are checked, plus their fader/pan/mute/phase/type balance
+-- Snapshots: 4 slots (A/B/C/D) holding the whole bank - which tracks and
+-- sends are checked, plus their fader/pan/mute/phase/type balance
 -- =============================================================================
 local SNAPSHOT_SLOTS = { "A", "B", "C", "D" }
 local SNAPSHOT_SECTION = "SK_BALANCE_CONTROL_SNAP"
@@ -1217,7 +1247,7 @@ local function snapshot_save(slot)
     local a, b = key:match("^(.-)>(.+)$")
     local vol, pan, mute, phase, sendmode
     if a then
-      -- send: a = owner guid, b = dest guid
+      -- a send: a = owner track, b = destination track
       local owner = find_track_by_guid(a)
       local idx = owner and find_send_index_by_dest(owner, b)
       if owner and idx then
@@ -1248,9 +1278,8 @@ local function snapshot_clear(slot)
   reaper.SetProjExtState(0, SNAPSHOT_SECTION, slot, "")
 end
 
--- Rebuilds the checked bank from a saved slot and applies the saved
--- fader/pan/mute/phase/type balance. Any saved entry whose track/send can
--- no longer be found (deleted since) is silently skipped.
+-- Rebuilds the checked bank from a saved slot and applies its balance.
+-- Anything saved whose track or send no longer exists is skipped.
 local function snapshot_recall(slot)
   local ok, data = reaper.GetProjExtState(0, SNAPSHOT_SECTION, slot)
   if not ok or data == "" then return end
@@ -1290,8 +1319,8 @@ end
 local g_dirty = false
 local function mark_dirty() g_dirty = true end
 local g_filter = ""
-local g_show_sends = false  -- toggled by the "Sends" button in the left panel
-local g_right_panel_offset_x = nil  -- right panel's left edge, used to line up the toolbar buttons with it
+local g_show_sends = false
+local g_right_panel_offset_x = nil  -- left edge of the right panel
 
 local function draw_toolbar()
   local dl = reaper.ImGui_GetWindowDrawList(ctx)
@@ -1303,8 +1332,8 @@ local function draw_toolbar()
   reaper.ImGui_TextColored(ctx, COL_ACCENT, "SK BALANCE CONTROL")
   pop_font(pf)
 
-  -- lines up with the left edge of the right panel itself, so the
-  -- toolbar buttons don't drift if the panel scrolls sideways
+  -- lined up with the left edge of the right panel, so the buttons don't
+  -- drift if that panel scrolls sideways
   local win_x = reaper.ImGui_GetWindowPos(ctx)
   local x = (g_right_panel_offset_x and (win_x + g_right_panel_offset_x)) or (title_x + title_tw + 24)
   local y = row_y
@@ -1328,8 +1357,8 @@ local function draw_toolbar()
   reaper.ImGui_Separator(ctx)
 end
 
--- A clearly visible full-width separator line for the context-menu popups
--- (the default one barely shows up against this dark theme).
+-- A clearly visible separator for the context menus (the default one
+-- barely shows against this dark theme).
 local function menu_separator()
   local x, y = reaper.ImGui_GetCursorScreenPos(ctx)
   local w = reaper.ImGui_GetContentRegionAvail(ctx)
@@ -1368,8 +1397,8 @@ local function draw_left_panel()
   end
   reaper.ImGui_Spacing(ctx)
 
-  -- the track/send list scrolls in its own area, so the filter box and
-  -- the All/None/Sends buttons above always stay in view
+  -- the list scrolls on its own, so the filter box and the buttons above
+  -- always stay in view
   local avail_w, avail_h = reaper.ImGui_GetContentRegionAvail(ctx)
   if reaper.ImGui_BeginChild(ctx, 'left_list', avail_w, avail_h, 0, 0) then
     local f = lc(g_filter)
@@ -1474,8 +1503,6 @@ local function draw_right_panel()
   for _, key in ipairs(stale) do set_selected(key, false) end
 
   if #visible == 0 then
-    -- nothing shown right now: reset any leftover link state so it
-    -- doesn't silently resurface on strips checked back in later
     if next(link_set) ~= nil then link_set = {} end
     g_link_all_lit = false
     reaper.ImGui_TextColored(ctx, COL_TEXT_DIM, "Tick a track or a send on the left to add it here.")
@@ -1486,7 +1513,7 @@ local function draw_right_panel()
   local ox, oy = reaper.ImGui_GetCursorScreenPos(ctx)
   ox, oy = ox + PAD, oy + PAD
 
-  -- fill the available height, keeping room at the bottom for labels/buttons
+  -- fill the available height, keeping room at the bottom for the labels
   local total_w = PAD * 2 + #visible * SW + math.max(0, #visible - 1) * STRIP_GAP
   local reserve = (total_w > avail_w) and 18 or 0
   SH = math.max(SH_MIN, math.floor(avail_h - PAD * 2 - reserve))
@@ -1494,9 +1521,9 @@ local function draw_right_panel()
   FADER_H = math.max(120, SH - FADER_Y - bottom_reserve)
   DBLBL_Y = FADER_Y + FADER_H + 2
 
-  -- gather every distinct owner track among the visible sends, and its
-  -- full set of outgoing sends (not just the ones shown here): soloing
-  -- one send strip should still mute that owner's other sends, shown or not
+  -- gather every owner track among the visible sends, with its full set
+  -- of outgoing sends (not only the ones shown): soloing one send strip
+  -- must still mute that owner's other sends, shown or not
   local owners_seen = {}
   for _, m in ipairs(visible) do
     if m.kind == "send" then
@@ -1525,13 +1552,22 @@ local function draw_right_panel()
   g_link_source_key = nil
   g_pan_link_delta = nil
   g_pan_link_source_key = nil
-  -- true once a move is detected coming from outside the script (see
-  -- below) rather than from a drag inside it; tells apply_linked_group
-  -- not to write the source strip back, since REAPER already holds that
-  -- value live and re-writing it while the user is still moving it would
-  -- look jerky
+  -- true once a move turns out to come from REAPER rather than from a
+  -- drag here: the source strip is then left alone, since REAPER already
+  -- holds that value and rewriting it mid-move would look jerky
   local link_delta_is_external = false
   local pan_link_delta_is_external = false
+
+  touched_mute, touched_solo, touched_phase = {}, {}, {}
+  pending_mute, pending_solo, pending_phase = {}, {}, {}
+
+  -- mute/solo/phase of every visible strip as they stood before any of
+  -- this frame's clicks (and their spread to linked strips) happened
+  for _, m in ipairs(visible) do
+    m.frame_start_mute = get_mute(m, owner_soloing)
+    m.frame_start_solo = get_solo(m)
+    m.frame_start_phase = get_phase(m)
+  end
 
   local function on_isolate(key)
     clear_selection()
@@ -1549,9 +1585,8 @@ local function draw_right_panel()
       if reaper.ImGui_Selectable(ctx, "Select destinations") then select_destinations(tr) end
       if reaper.ImGui_Selectable(ctx, "Select sources") then
         if m.kind == "send" then
-          -- this strip is one specific send: its "source" is just the
-          -- owner track of that send, not every track feeding the
-          -- destination
+          -- this strip is one single send, so its source is just the
+          -- track that owns it
           set_selected(reaper.GetTrackGUID(m.owner), true)
         else
           select_sources(tr)
@@ -1570,21 +1605,20 @@ local function draw_right_panel()
     render_strip(dl, x, oy, m.widget_id, m, visible, owner_soloing, mark_dirty, on_isolate, on_context_menu)
     m.linked = link_set[m.key] or false
     if m.kind == "track" then
-      m.get_vol = function() local ok, v = reaper.GetTrackUIVolPan(m.track); return gain_to_db(ok and v or reaper.GetMediaTrackInfo_Value(m.track, "D_VOL")) end
+      m.get_vol = function() local ok, v = reaper.GetTrackUIVolPan(m.track); return link_db(ok and v or reaper.GetMediaTrackInfo_Value(m.track, "D_VOL")) end
       m.get_pan = function() local ok, _, p = reaper.GetTrackUIVolPan(m.track); return ok and p or reaper.GetMediaTrackInfo_Value(m.track, "D_PAN") end
     else
-      m.get_vol = function() local ok, v = reaper.GetTrackSendUIVolPan(m.owner, m.idx); return ok and gain_to_db(v) or nil end
+      m.get_vol = function() local ok, v = reaper.GetTrackSendUIVolPan(m.owner, m.idx); return ok and link_db(v) or nil end
       m.get_pan = function() local ok, _, p = reaper.GetTrackSendUIVolPan(m.owner, m.idx); return ok and p or nil end
     end
     x = x + SW + STRIP_GAP
   end
 
-  -- A strip only reports a move when it's dragged inside this script. If
-  -- a linked strip was instead moved directly in REAPER (mixer, arrange
-  -- automation, a control surface...), catch the gap between what we
-  -- last saw and what's there now, and feed it into the same Link
-  -- machinery as a drag inside the script.
-  if not g_link_delta and not g_dirty then
+  -- A strip only reports a move when it is dragged here. If a linked
+  -- strip was moved in REAPER instead (mixer, automation, a control
+  -- surface), catch the gap between its last known value and its current
+  -- one, and feed that into the same Link machinery.
+  if not g_link_delta then
     for _, m in ipairs(visible) do
       if link_set[m.key] then
         local last_db = last_vol_db[m.key]
@@ -1597,7 +1631,7 @@ local function draw_right_panel()
       end
     end
   end
-  if not g_pan_link_delta and not g_dirty then
+  if not g_pan_link_delta then
     for _, m in ipairs(visible) do
       if link_set[m.key] then
         local last_p = last_pan_val[m.key]
@@ -1611,8 +1645,31 @@ local function draw_right_panel()
     end
   end
 
-  -- "Link all" bulk toggle: link everything visible, or unlink it all if
-  -- it's already fully linked.
+  -- Same idea for mute / solo / phase: compare each linked strip against
+  -- its state at the end of the previous frame, and pass the first
+  -- difference on to the rest of its group. Strips already marked in
+  -- touched_* are skipped, their change having come from here.
+  local function detect_external_bool(frame_start_field, last_tbl, touched_tbl, pending_tbl, set_fn)
+    for _, m in ipairs(visible) do
+      if link_set[m.key] and not touched_tbl[m.key] then
+        local last = last_tbl[m.key]
+        local now = m[frame_start_field]
+        if last ~= nil and now ~= last then
+          apply_linked_bool(visible, m.key, now, set_fn, m, touched_tbl, pending_tbl, true)
+          mark_dirty()
+          return
+        end
+      end
+    end
+  end
+
+  detect_external_bool("frame_start_mute", last_mute, touched_mute, pending_mute,
+    function(m2, v2) set_mute(m2, v2, owner_soloing) end)
+  detect_external_bool("frame_start_solo", last_solo, touched_solo, pending_solo, set_solo)
+  detect_external_bool("frame_start_phase", last_phase, touched_phase, pending_phase, set_phase)
+
+  -- "Link all": link everything visible, or unlink it all if it is
+  -- already fully linked.
   if g_link_all_requested then
     local all_on = #visible > 0
     for _, m in ipairs(visible) do
@@ -1634,7 +1691,7 @@ local function draw_right_panel()
     g_link_all_lit = all_on
   end
 
-  -- apply a linked fader drag to the rest of the group
+  -- apply a linked fader move to the rest of the group
   apply_linked_group(visible, g_link_source_key, g_link_delta, DB_MIN, DB_MAX,
     function(m) return m.get_vol() end,
     function(m, db)
@@ -1644,7 +1701,7 @@ local function draw_right_panel()
       drag_hold[m.widget_id] = db_to_norm(db)
     end, not link_delta_is_external)
 
-  -- same, for a linked pan-knob drag
+  -- same, for a linked pan move
   apply_linked_group(visible, g_pan_link_source_key, g_pan_link_delta, -1, 1,
     function(m)
       if m.kind == "track" then
@@ -1661,19 +1718,29 @@ local function draw_right_panel()
       drag_hold[m.widget_id .. '#p'] = pan
     end, not pan_link_delta_is_external)
 
-  -- refresh what we remember for each visible strip now that this
-  -- frame's move has landed, so next frame's comparison starts clean
+  -- Refresh each strip's stored state now that this frame's changes have
+  -- landed. This is the only place last_mute/last_solo/last_phase are
+  -- written. For anything this script wrote, the value it asked for is
+  -- used rather than reading it straight back from REAPER; everything
+  -- else is read for real, which is what lets a change made in REAPER
+  -- show up on the next frame.
   for _, m in ipairs(visible) do
     local v = m.get_vol and m.get_vol()
     if v then last_vol_db[m.key] = v end
     local p = m.get_pan and m.get_pan()
     if p then last_pan_val[m.key] = p end
+    if touched_mute[m.key] then last_mute[m.key] = pending_mute[m.key]
+    else last_mute[m.key] = get_mute(m, owner_soloing) end
+    if touched_solo[m.key] then last_solo[m.key] = pending_solo[m.key]
+    else last_solo[m.key] = get_solo(m) end
+    if touched_phase[m.key] then last_phase[m.key] = pending_phase[m.key]
+    else last_phase[m.key] = get_phase(m) end
   end
 
   if g_link_delta or g_pan_link_delta then mark_dirty() end
 
-  -- enforce solo per owner, and put back the mute state of any owner
-  -- that no longer has a visible send strip
+  -- enforce solo per owner, and put back the mute state of any owner that
+  -- no longer has a visible send strip
   for oguid, data in pairs(owners_seen) do
     enforce_solo(data.owner, oguid, data.sends, owner_soloing[oguid])
   end
@@ -1688,6 +1755,9 @@ local function draw_right_panel()
   reaper.ImGui_Dummy(ctx, (x - ox) + PAD, SH)
 end
 
+-- =============================================================================
+-- Theme and main loop
+-- =============================================================================
 local function push_theme_base()
   local list = {
     { reaper.ImGui_Col_WindowBg,             COL_BG },
@@ -1767,8 +1837,8 @@ local function loop()
       reaper.ImGui_EndChild(ctx)
     end
 
-    -- forward Space to Play/Stop, since ReaImGui otherwise swallows it
-    -- while the console window is focused
+    -- forward Space to Play/Stop, which ReaImGui would otherwise swallow
+    -- while this window has the focus
     if reaper.ImGui_IsKeyPressed and reaper.ImGui_Key_Space
        and reaper.ImGui_IsWindowFocused(ctx, reaper.ImGui_FocusedFlags_RootAndChildWindows())
        and not reaper.ImGui_IsAnyItemActive(ctx)
@@ -1776,6 +1846,7 @@ local function loop()
       reaper.Main_OnCommand(40044, 0)  -- Transport: Play/stop
     end
 
+    -- one undo point per gesture, written when the mouse or Enter is released
     local enter_pressed = reaper.ImGui_IsKeyPressed and reaper.ImGui_Key_Enter and
       (reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Enter()) or
        (reaper.ImGui_Key_KeypadEnter and reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_KeypadEnter())))
