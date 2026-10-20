@@ -76,6 +76,24 @@ The pattern being worked on is kept with the project, so closing the window no l
       </version>
     </reapack>
   </category>
+  <category name="Sampler">
+    <reapack name="SK SP Chopper.lua" type="script" desc="SK SP Chopper : Chops an audio item into up to 16 slices for the Roland SP-404MKII, on transients, grid or equal parts">
+      <version name="1.0" author="Studio Kozak" time="2026-10-20T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20SP%20Chopper.lua</source>
+        <changelog><![CDATA[Initial release. Chops one audio item into up to 16 slices, one per pad of a Roland SP-404MKII bank. Slices follow the transients, the project grid or equal parts, and the markers can then be moved, added or removed on a zoomable waveform. Every chop can be heard from a 4x4 pad grid, and chops under 100 ms are flagged, as the SP may refuse them.
+SEND TO KIT and ALL TO KIT put chops in SK SP Kit Builder without cutting the item. SAVE AS WAV writes one chop as a 48 kHz / 16-bit WAV file. CHOP cuts the item in REAPER and names the slices 01 to 16.
+Requires ReaImGui. SWS and js_ReaScriptAPI are optional.]]></changelog>
+      </version>
+    </reapack>
+    <reapack name="SK SP Kit Builder.lua" type="script" desc="SK SP Kit Builder : Builds a 16-pad kit and exports it as 48 kHz / 16-bit WAV files ready to import into the Roland SP-404MKII">
+      <version name="1.0" author="Studio Kozak" time="2026-10-20T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20SP%20Kit%20Builder.lua</source>
+        <changelog><![CDATA[Initial release. A grid of 16 pads, filled by dropping audio files from the Finder, from the items selected in REAPER, or straight from SK SP Chopper. Drag a pad onto another to swap them. The kit is saved with the project.
+EXPORT KIT writes 48 kHz / 16-bit WAV files numbered 01 to 16 by pad, into a folder of your choice, typically the IMPORT folder of the SD card, so a multi-select import on the SP fills the pads in order. Optional processing: silence trimming, normalisation per sample or across the whole kit, anti-click fades, mono or stereo conversion, dither. Names are cleaned up so the SP displays them properly.
+Requires ReaImGui. SWS and js_ReaScriptAPI are optional.]]></changelog>
+      </version>
+    </reapack>
+  </category>
   <category name="Tools">
     <reapack name="SK Cue Bus Manager_EN.lua" type="script" desc="SK Cue Bus Manager : Headphone monitoring console with VU-meters and routing (EN)">
       <version name="1.5" author="Studio Kozak" time="2026-08-29T00:00:00Z">
