@@ -141,6 +141,20 @@ After an unexpected error the script keeps running and reports it in the REAPER 
       </version>
     </reapack>
     <reapack name="SK Routing Hub.lua" type="script" desc="SK Routing Hub : Comprehensive routing management tool">
+      <version name="2.2" author="Studio Kozak" time="2026-10-30T00:00:00Z">
+        <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Routing%20Hub.lua</source>
+        <changelog><![CDATA[Redesigned interface. The track list sits in a left column with folder collapsing, track numbers, role dots (green: receives sends, red: VCA master) and MS / IO / menu buttons on each row. SENDS and RECEIVES, or VCA MASTER and VCA SLAVE, are shown as cards on the right, with aligned columns and a common header for Bulk edit and the + Send / + Receive buttons. A Sends & receives / Groups / VCA switch sits at the top, and a status bar with usage hints at the bottom.
+Folder, Bus, FX and VCA buttons at the bottom of the track list create a new folder, summing bus, FX return or VCA from the selection, each with its own dialog and colour palette. A + Track button creates one or more tracks at once.
+The Color palette now always stays in front, even while you change the track selection. It opens centred on the main window and applies to the current selection.
+Double-clicking a send volume knob now really resets it to 0 dB.
+The Edit buttons of the Groups / VCA view now open the options window.
+Removing a VCA group now also releases the Volume follow option on its slaves.
+In the track menu, "Convert track to folder" is now called "Move under track".
+The delete confirmation no longer says the action cannot be undone: it can, with Ctrl+Z.
+Undo history entries now start with "SK RH".
+Fixed an error that could appear when creating sends.
+Unused code removed and comments in the file rewritten.]]></changelog>
+      </version>
       <version name="2.1" author="Studio Kozak" time="2026-08-29T00:00:00Z">
         <source main="main">https://github.com/studiokozak/SK-Reaper-Scripts-Effects/raw/refs/heads/main/SK%20Reaper%20Scripts/SK%20Routing%20Hub.lua</source>
         <changelog><![CDATA[Added a "SK ROUTING HUB" title to the toolbar, in the same style as the other Studio Kozak scripts.
